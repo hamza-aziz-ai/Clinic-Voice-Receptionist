@@ -69,6 +69,24 @@ class EvaluationReport:
     outcomes: list[SlotOutcome] = field(default_factory=list)
     language_correct: int = 0
     language_total: int = 0
+    # Cross-check bookkeeping. Separated into the two things that matter:
+    # a disagreement about a value that was wrong is the mechanism working,
+    # a disagreement about a value that was right is the cost of running it.
+    crosschecks_run: int = 0
+    crosschecks_unavailable: int = 0
+    disagreed_on_wrong: int = 0
+    disagreed_on_correct: int = 0
+    rescued: int = 0          # was heading for a silent error, now flagged
+
+    @property
+    def false_alarm_rate(self) -> float:
+        """Share of disagreements that were about a value the rules got right.
+
+        The honest cost figure. Each one is a question asked of a caller who
+        did not need to be asked.
+        """
+        total = self.disagreed_on_correct + self.disagreed_on_wrong
+        return self.disagreed_on_correct / total if total else 0.0
 
     def by_outcome(self) -> dict[str, int]:
         counts = {k: 0 for k in
@@ -147,7 +165,16 @@ def evaluate(
     reference_time: datetime,
     asr_severity: float = 0.0,
     seed: int = 0,
+    crosscheck: Any = None,
 ) -> EvaluationReport:
+    """Score the extractor, optionally with the LLM second opinion applied.
+
+    ``crosscheck`` is the same callable the workflow takes:
+    ``(text, reference_time, name, phone) -> LLMExtraction | None``. Passing
+    one measures the *combined* system, which is the only comparison worth
+    making - a second extractor scored on its own says nothing about whether
+    the thing that books appointments got safer.
+    """
     rng = random.Random(seed)
     report = EvaluationReport()
 
@@ -165,6 +192,16 @@ def evaluate(
 
         slots = extract_slots(transcript, reference_time, confidences)
 
+        # Snapshot before the cross-check so its effect is attributable. A
+        # slot already flagged by low ASR confidence was not "rescued" by the
+        # second extractor, and counting it as such would flatter the feature.
+        flagged_before = {
+            s.name: (s.needs_confirmation or not s.filled) for s in slots.all_slots()
+        }
+
+        if crosscheck is not None:
+            _run_crosscheck(report, crosscheck, slots, transcript, reference_time)
+
         for slot_name, expected in case.expected.items():
             slot = getattr(slots, slot_name)
             actual = slot.value
@@ -172,13 +209,55 @@ def evaluate(
                 correct = expected == actual
             else:
                 correct = str(actual) == str(expected)
+            flagged = slot.needs_confirmation or not slot.filled
             report.outcomes.append(SlotOutcome(
                 slot=slot_name, expected=expected, actual=actual,
                 correct=correct, confidence=slot.confidence,
-                flagged_for_readback=slot.needs_confirmation or not slot.filled,
+                flagged_for_readback=flagged,
             ))
 
+            if crosscheck is not None and flagged and not flagged_before[slot_name]:
+                # Newly flagged because of the cross-check.
+                if correct:
+                    report.disagreed_on_correct += 1
+                else:
+                    # Wrong, and would have gone through unflagged. This is
+                    # the only number that justifies running a second model.
+                    report.disagreed_on_wrong += 1
+                    report.rescued += 1
+
     return report
+
+
+def _run_crosscheck(
+    report: EvaluationReport,
+    crosscheck: Any,
+    slots: Any,
+    transcript: str,
+    reference_time: datetime,
+) -> None:
+    """Apply the second opinion to ``slots`` in place, recording availability.
+
+    An unavailable cross-check is counted rather than ignored. A run where
+    the model was down for half the corpus and silently contributed nothing
+    would otherwise be indistinguishable from a run where it agreed with
+    everything - and those two say opposite things about the feature.
+    """
+    from ..nlu.crosscheck import apply_crosscheck
+
+    try:
+        extraction = crosscheck(
+            transcript, reference_time,
+            slots.patient_name.value, slots.phone.raw_text,
+        )
+    except Exception:
+        extraction = None
+
+    result = apply_crosscheck(slots, extraction)
+    if result.available:
+        report.crosschecks_run += 1
+    else:
+        report.crosschecks_unavailable += 1
 
 
 def render_report(report: EvaluationReport, label: str) -> str:

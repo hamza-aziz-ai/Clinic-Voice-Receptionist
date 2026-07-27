@@ -54,3 +54,74 @@ class TestDegradation:
         text = "my name is Priya Menon"
         out, _ = degrade_transcript(text, 0.0, random.Random(1))
         assert out == text
+
+
+# ---------------------------------------------------------------- cross-check
+def _always(**kw):
+    from receptionist.nlu.llm_extractor import LLMExtraction
+    return lambda text, ref, name, phone: LLMExtraction(**kw)
+
+
+def test_crosscheck_absent_leaves_the_baseline_identical():
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    base = evaluate(CASES, REFERENCE, 0.30, seed=11)
+    same = evaluate(CASES, REFERENCE, 0.30, seed=11, crosscheck=lambda *a: None)
+    assert base.by_outcome() == same.by_outcome()
+    assert same.crosschecks_unavailable == len(CASES)
+    assert same.crosschecks_run == 0
+
+
+def test_an_unavailable_model_is_counted_not_ignored():
+    """A run where the model was down must not look like one where it agreed."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    def broken(text, ref, name, phone):
+        raise TimeoutError("ollama down")
+
+    r = evaluate(CASES, REFERENCE, 0.0, seed=11, crosscheck=broken)
+    assert r.crosschecks_unavailable == len(CASES)
+    assert r.rescued == 0
+
+
+def test_agreement_does_not_change_any_outcome():
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    base = evaluate(CASES, REFERENCE, 0.0, seed=11)
+    agreeing = evaluate(CASES, REFERENCE, 0.0, seed=11,
+                        crosscheck=_always(procedure=None, appointment_datetime=None))
+    assert base.by_outcome() == agreeing.by_outcome()
+    assert agreeing.crosschecks_run == len(CASES)
+
+
+def test_a_dissenting_model_raises_flagged_count_and_never_silent_count():
+    """Whatever the second extractor says, silent errors cannot go up."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    base = evaluate(CASES, REFERENCE, 0.0, seed=11)
+    dissent = evaluate(CASES, REFERENCE, 0.0, seed=11,
+                       crosscheck=_always(procedure="whitening"))
+
+    base_counts, new_counts = base.by_outcome(), dissent.by_outcome()
+    assert new_counts["wrong_silent"] <= base_counts["wrong_silent"]
+    flagged_before = base_counts["correct_flagged"] + base_counts["wrong_caught"]
+    flagged_after = new_counts["correct_flagged"] + new_counts["wrong_caught"]
+    assert flagged_after > flagged_before
+
+
+def test_false_alarms_and_rescues_are_counted_separately():
+    """Disagreeing about a correct value is a cost, not a save."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    r = evaluate(CASES, REFERENCE, 0.0, seed=11,
+                 crosscheck=_always(procedure="whitening"))
+    # At zero ASR error the rules are right about procedure, so every
+    # disagreement here is by definition a false alarm.
+    assert r.disagreed_on_correct > 0
+    assert r.rescued == 0
+    assert r.false_alarm_rate == 1.0

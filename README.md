@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 179 passed
+$ python -m pytest -q          # 187 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -172,6 +172,44 @@ reassuring number that means nothing is worse than no number.
 If any identifier cannot be redacted verbatim, or a digit run survives that the
 rule extractor never found, **nothing is sent**. That guard is what exposed the
 name bug fixed in the commit before this one.
+
+### Measured on the corpus: it does not currently pay for itself
+
+`python scripts/eval_crosscheck.py` — same corpus, same seed, same degraded
+transcripts, rules-only versus rules-plus-cross-check.
+
+| ASR error | | Slot accuracy | **Silent errors** | Read-backs | **Rescued** | False alarms |
+|---:|---|---:|---:|---:|---:|---:|
+| 0% | rules only | 100.0% | **0** | 10 | – | – |
+| 0% | + cross-check | 100.0% | **0** | 12 | **0** | 2 |
+| 15% | rules only | 83.8% | **0** | 14 | – | – |
+| 15% | + cross-check | 83.8% | **0** | 15 | **0** | 1 |
+| 30% | rules only | 75.7% | **0** | 19 | – | – |
+| 30% | + cross-check | 75.7% | **0** | 20 | **0** | 1 |
+| 50% | rules only | 75.7% | **0** | 25 | – | – |
+| 50% | + cross-check | 75.7% | **0** | 26 | **0** | 1 |
+
+*40 model calls, 301s, 7.5s each.*
+
+**Rescued is zero at every severity, and the cross-check adds one to two
+unnecessary read-backs per run.** On this corpus it is a pure cost.
+
+That is not a surprising result once stated: *rescued* counts wrong values that
+would have gone through unflagged, and the silent-error column is already zero
+without it. There is nothing to rescue. A safety net under a floor catches
+nothing and occasionally trips someone.
+
+So it stays **off by default**, and the honest summary is that it is unproven
+rather than useless. The one silent error it has actually caught — `"Sara Ali
+root canal"`, in the commit before it — was found by its redaction guard on a
+transcript the corpus does not contain, and that bug is now fixed in the rules
+where it belongs. The condition under which this feature would earn its place is
+a corpus that still contains silent errors; building one means finding classes of
+input where the rules are confidently wrong, which is the more valuable work and
+is not done here.
+
+The measurement is the deliverable. A feature that ships with a table showing it
+currently buys nothing is worth more than one that ships with a plausible story.
 
 ### What the model actually did
 
@@ -378,5 +416,6 @@ the real request body, so an ordering mistake fails offline.
   specific rather than being a softmax the model reports about itself. The LLM
   is a *second* extractor bolted alongside, allowed only to lower confidence;
   it never produces a value that gets booked.
-- **The cross-check is off by default and has never run against real calls.**
-  Its numbers above are from five hand-written utterances, not a corpus.
+- **The cross-check is off by default and, measured on the corpus, currently
+  buys nothing** — see the table above. It has never run against real call
+  audio, and the corpus is ten utterances.
