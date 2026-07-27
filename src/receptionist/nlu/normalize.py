@@ -164,6 +164,32 @@ def normalise_datetime(raw: str, reference: datetime) -> NormalisedDateTime | No
     )
 
 
+def spoken_time(t: time) -> str:
+    """A time of day the way a receptionist says it out loud.
+
+    Every hour spoken to a caller needs its half of the day attached. The
+    agent said "We're open from 9 in the morning until 8", which is 8 pm and
+    reads as 8 am - and an agent that is unclear about opening hours will be
+    told to come in at a time the clinic is shut.
+
+    24-hour format is unambiguous but wrong for speech: a TTS voice reading
+    "20:00" is not how anyone says it, and "closing at 20:00" is harder to
+    act on than "closing at 8 in the evening".
+    """
+    hour12 = t.hour % 12 or 12
+    base = f"{hour12}:{t.minute:02d}" if t.minute else f"{hour12}"
+
+    if t.hour == 12 and t.minute == 0:
+        return "12 noon"
+    if t.hour < 12:
+        part = "in the morning"
+    elif t.hour < 17:
+        part = "in the afternoon"
+    else:
+        part = "in the evening"
+    return f"{base} {part}"
+
+
 NAME_NOISE = re.compile(
     r"\b(my name is|this is|i am|i'm|it's|speaking|name|call me)\b", re.IGNORECASE
 )

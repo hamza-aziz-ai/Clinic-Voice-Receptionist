@@ -20,6 +20,7 @@ from typing import Any, Literal
 from ..messaging.base import MessagingConnector, OutboundMessage, render_template
 from ..nlu.crosscheck import CrossCheckReport, apply_crosscheck
 from ..nlu.language import LANGUAGE_NAMES, detect_language
+from ..nlu.normalize import spoken_time
 from ..nlu.slots import SlotSet, extract_slots, readback_prompt
 from ..scheduling.calendar import Calendar
 
@@ -389,12 +390,19 @@ class CallHandler:
         after the caller has just said "Saturday morning" reads as though we
         were not listening, and invites them to repeat the day rather than
         supply the missing half.
+
+        The opening hours are read off ClinicHours rather than written into
+        the sentence. Hardcoded, they were a second copy of a fact the
+        scheduler already owns: change the closing time and the agent keeps
+        quoting the old one while the calendar refuses the booking.
         """
         label = f"{day:%A %d %B}"
+        hours = self.calendar.hours
+        opens, closes = spoken_time(hours.open_time), spoken_time(hours.close_time)
         return (
             f"What time on {label} would suit you?",
-            f"We're open from 9 in the morning until 8. What time on {label} works?",
-            f"Could you give me a time on {label} - for example, 10:30?",
+            f"We're open from {opens} until {closes}. What time on {label} works?",
+            f"Could you give me a time on {label} - for example, 10:30 in the morning?",
         )[min(attempt, 3) - 1]
 
     # ------------------------------------------------------------------

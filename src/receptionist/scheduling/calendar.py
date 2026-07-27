@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Literal
 
+from ..nlu.normalize import spoken_time
 from ..nlu.slots import PROCEDURE_DURATION_MIN
 
 BookingStatus = Literal["confirmed", "cancelled", "no_show", "completed"]
@@ -37,13 +38,19 @@ class ClinicHours:
         if when.weekday() in self.closed_weekdays:
             return False, f"clinic is closed on {when:%A}"
         end = (when + timedelta(minutes=duration_min)).time()
+        # These strings are spoken to the caller verbatim by the call flow, so
+        # they carry the half of the day. "closing at 20:00" is unambiguous on
+        # paper and unusable through a TTS voice.
         if when.time() < self.open_time:
-            return False, f"clinic opens at {self.open_time:%H:%M}"
+            return False, f"the clinic opens at {spoken_time(self.open_time)}"
         if end > self.close_time:
-            return False, f"appointment would end after closing at {self.close_time:%H:%M}"
+            return False, (
+                f"that would run past closing at {spoken_time(self.close_time)}"
+            )
         if when.time() < self.lunch_end and end > self.lunch_start:
             return False, (
-                f"overlaps the {self.lunch_start:%H:%M}-{self.lunch_end:%H:%M} break"
+                f"that overlaps the break between {spoken_time(self.lunch_start)} "
+                f"and {spoken_time(self.lunch_end)}"
             )
         if when.minute % self.slot_granularity_min:
             return False, f"appointments start on {self.slot_granularity_min}-minute boundaries"
@@ -149,7 +156,11 @@ class Calendar:
             if self._concurrent_at(start, duration) >= self.chairs:
                 return BookingResult(
                     False, None,
-                    f"all {self.chairs} chair(s) busy at {start:%H:%M}",
+                    # Also spoken verbatim. "all 2 chair(s) busy at 15:00" is
+                    # a log line: a caller does not know or care how many
+                    # chairs the clinic has, and "chair(s)" has no
+                    # pronunciation.
+                    f"we're fully booked at {spoken_time(start.time())}",
                     self.suggest(start, duration),
                 )
 

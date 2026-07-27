@@ -305,3 +305,76 @@ def test_the_whole_call_books_at_the_time_the_caller_chose():
     assert booking.start == datetime(2026, 8, 1, 10, 30)
     assert booking.procedure == "checkup"
     assert booking.patient_name == "Hamza Aziz"
+
+
+def test_every_spoken_hour_carries_its_half_of_the_day():
+    """The agent said "We're open from 9 in the morning until 8" - which is
+    8 pm and reads as 8 am. An agent unclear about opening hours gets people
+    turning up when the clinic is shut."""
+    from datetime import time as _time
+    from receptionist.nlu.normalize import spoken_time
+    assert spoken_time(_time(9, 0)) == "9 in the morning"
+    assert spoken_time(_time(20, 0)) == "8 in the evening"
+    assert spoken_time(_time(13, 0)) == "1 in the afternoon"
+    assert spoken_time(_time(12, 0)) == "12 noon"
+    assert spoken_time(_time(10, 30)) == "10:30 in the morning"
+    assert spoken_time(_time(0, 0)) == "12 in the morning"
+
+
+def test_the_opening_hours_prompt_is_unambiguous_and_not_hardcoded():
+    """Written into the sentence, the hours were a second copy of a fact the
+    scheduler owns - change the closing time and the agent quotes the old one
+    while the calendar refuses the booking."""
+    from datetime import time as _time
+    from receptionist.messaging.base import MockWhatsApp
+    hours = ClinicHours(open_time=_time(8, 0), close_time=_time(17, 30))
+    handler = CallHandler(Calendar(hours=hours, chairs=1), MockWhatsApp())
+    prompt = handler._ask_time_on(date(2026, 8, 1), attempt=2)
+    assert "8 in the morning" in prompt
+    assert "5:30 in the evening" in prompt
+    assert "until 8." not in prompt
+
+
+def test_rejection_reasons_are_spoken_english_not_log_lines():
+    """These strings go straight to the caller through the call flow."""
+    from receptionist.messaging.base import MockWhatsApp
+    calendar = Calendar(hours=ClinicHours(), chairs=1)
+    handler = CallHandler(calendar, MockWhatsApp())
+
+    too_early = calendar.book("A", "+971501234567", "cleaning",
+                              datetime(2026, 7, 28, 7, 0))
+    assert too_early.reason == "the clinic opens at 9 in the morning"
+
+    calendar.book("B", "+971501234567", "cleaning", datetime(2026, 7, 28, 15, 0))
+    full = calendar.book("C", "+971501234567", "cleaning",
+                         datetime(2026, 7, 28, 15, 0))
+    assert full.reason == "we're fully booked at 3 in the afternoon"
+    assert "chair(s)" not in full.reason
+
+    lunch = calendar.book("D", "+971501234567", "cleaning",
+                          datetime(2026, 7, 28, 13, 15))
+    assert "1 in the afternoon" in lunch.reason and "2 in the afternoon" in lunch.reason
+
+
+def test_no_spoken_string_leaves_an_hour_bare():
+    """Any hour the agent says aloud must carry am/pm or a part of the day."""
+    import re
+    from receptionist.messaging.base import MockWhatsApp
+    handler = CallHandler(Calendar(hours=ClinicHours(), chairs=1), MockWhatsApp())
+
+    spoken = [handler._ask_time_on(date(2026, 8, 1), n) for n in (1, 2, 3)]
+    spoken += [p for prompts in handler.ASK_PROMPTS.values() for p in prompts]
+
+    # Calendar dates are stripped first: "Saturday 01 August" is a date, and
+    # the 01 in it is not an hour anyone could mistake for one.
+    date_label = re.compile(
+        r"\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|"
+        r"September|October|November|December)\b")
+    # (?![:\d]) stops the engine backtracking to match just the "10" of
+    # "10:30" and reporting a qualified time as unqualified.
+    bare = re.compile(
+        r"\b\d{1,2}(?::\d{2})?(?![:\d])"
+        r"(?!\s*(?:am|pm|noon|in the (?:morning|afternoon|evening)))",
+        re.IGNORECASE)
+    offenders = [s for s in spoken if bare.search(date_label.sub("", s))]
+    assert not offenders, f"hour spoken without am/pm: {offenders}"
