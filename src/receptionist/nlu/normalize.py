@@ -177,6 +177,34 @@ NAME_BOUNDARY = {
     "have", "has", "book", "booking", "appointment", "calling", "call",
     "tomorrow", "today", "next", "on", "at", "with", "about", "regarding",
 }
+
+# The same bug again, one vocabulary further out. "my name is Sara Ali root
+# canal on 15/08" stopped at "on" - which is in the list - having already
+# swallowed "root canal", which was not. The name became "Sara Ali Root
+# Canal" at confidence 0.765, above the 0.75 gate, so it booked and went out
+# on the WhatsApp confirmation without ever being read back: a silent error,
+# the one class this system claims none of.
+#
+# It survived because every corpus utterance happens to put a stop-word
+# between the name and the procedure ("I need a cleaning"). A caller who
+# does not pause that way was never tested. Found when the LLM cross-check's
+# redaction guard refused to send, because the bloated name was not a
+# verbatim substring of the transcript.
+#
+# Kept in sync with PROCEDURES by test_name_boundary_covers_every_procedure_word,
+# which imports both - a runtime import would be circular, since slots.py
+# imports this module.
+CLINICAL_BOUNDARY = {
+    "cleaning", "scaling", "polish", "hygiene", "clean",
+    "extraction", "remove", "pull", "take", "out",
+    "root", "canal", "rct", "endo",
+    "filling", "cavity", "restoration",
+    "checkup", "check", "up", "consultation", "look", "examine", "pain",
+    "whitening", "bleaching", "whiten",
+    "braces", "aligner", "orthodontic", "invisalign",
+}
+NAME_BOUNDARY |= CLINICAL_BOUNDARY
+
 MAX_NAME_WORDS = 4
 
 

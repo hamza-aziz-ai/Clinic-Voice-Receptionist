@@ -151,3 +151,35 @@ class TestSlotConfidence:
     def test_readback_prompts_are_slot_specific(self):
         s = extract_slots("my number is nine seven one five zero one two three four five six seven", REF)
         assert "confirm your number" in readback_prompt(s.phone)
+
+
+def test_name_capture_stops_at_the_procedure():
+    """Regression: "my name is Sara Ali root canal on 15/08" produced the
+    patient name "Sara Ali Root Canal" at 0.765 - above the 0.75 gate, so it
+    booked and was sent on the WhatsApp confirmation with no read-back.
+
+    Every corpus utterance happens to put a stop-word between the name and the
+    procedure ("I need a cleaning"), so a caller who does not pause that way
+    was never covered.
+    """
+    from datetime import datetime as _dt
+    from receptionist.nlu.slots import extract_slots as _extract
+
+    slots = _extract("my name is Sara Ali root canal on 15/08 at 11am number 0509998887",
+                     _dt(2026, 7, 27, 10, 0))
+    assert slots.patient_name.value == "Sara Ali"
+    assert slots.procedure.value == "root_canal"
+
+
+def test_name_boundary_covers_every_procedure_word():
+    """The two lists cannot drift: a procedure keyword that is not a name
+    boundary is a name that swallows it."""
+    from receptionist.nlu.normalize import NAME_BOUNDARY
+    from receptionist.nlu.slots import PROCEDURES
+
+    for keywords in PROCEDURES.values():
+        for keyword in keywords:
+            for word in keyword.split():
+                assert word in NAME_BOUNDARY, (
+                    f"procedure word {word!r} would be absorbed into a patient name"
+                )
