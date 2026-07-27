@@ -1,0 +1,265 @@
+"""Slot extraction with per-field confidence.
+
+THE CENTRAL DISCIPLINE OF THIS PROJECT
+
+A voice receptionist fails differently from a chatbot. The failure is not
+"the model said something wrong" - it is "the model heard something wrong and
+booked on it with complete confidence". A misheard digit sends the
+confirmation WhatsApp to a stranger. A misheard date books the wrong day. The
+caller hangs up believing they have an appointment.
+
+So confidence is tracked per slot, not per utterance, and it is derived from
+things that are actually measurable:
+
+  * ASR word-level confidence for the span the value came from
+  * whether the value survived normalisation into a valid form
+  * whether it was stated once or repeated consistently
+  * whether it is intrinsically risky (phone digits are far easier to
+    mishear than a procedure name drawn from a closed set)
+
+Anything below threshold is not guessed and is not discarded - it is read
+back to the caller for explicit confirmation. That is the entire safety
+mechanism, and it is why this is not a Zapier chain.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Literal
+
+from .normalize import (
+    normalise_datetime,
+    normalise_name,
+    normalise_phone,
+)
+
+SlotName = Literal["patient_name", "phone", "appointment_time", "procedure"]
+
+# Confidence floors below which a slot must be confirmed aloud before use.
+# Phone is highest because a single wrong digit is silently catastrophic:
+# the number remains valid, so nothing downstream can detect the error.
+CONFIRMATION_THRESHOLDS: dict[str, float] = {
+    "phone": 0.92,
+    "appointment_time": 0.85,
+    "patient_name": 0.75,
+    "procedure": 0.70,
+}
+
+PROCEDURES: dict[str, tuple[str, ...]] = {
+    "cleaning": ("cleaning", "scaling", "polish", "hygiene", "clean"),
+    "extraction": ("extraction", "remove", "pull", "take out"),
+    "root_canal": ("root canal", "rct", "endo"),
+    "filling": ("filling", "cavity", "restoration"),
+    "checkup": ("checkup", "check up", "consultation", "look at", "examine", "pain"),
+    "whitening": ("whitening", "bleaching", "whiten"),
+    "braces": ("braces", "aligner", "orthodontic", "invisalign"),
+}
+
+PROCEDURE_DURATION_MIN: dict[str, int] = {
+    "cleaning": 30, "extraction": 45, "root_canal": 90,
+    "filling": 45, "checkup": 20, "whitening": 60, "braces": 45,
+}
+
+
+@dataclass
+class Slot:
+    name: SlotName
+    raw_text: str | None = None
+    value: Any = None
+    confidence: float = 0.0
+    source: str = "unfilled"
+    confirmed: bool = False
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def filled(self) -> bool:
+        return self.value is not None
+
+    @property
+    def needs_confirmation(self) -> bool:
+        """Below threshold and not yet confirmed aloud."""
+        if not self.filled:
+            return False
+        if self.confirmed:
+            return False
+        return self.confidence < CONFIRMATION_THRESHOLDS[self.name]
+
+    @property
+    def usable(self) -> bool:
+        return self.filled and not self.needs_confirmation
+
+    def confirm(self) -> None:
+        """Caller explicitly agreed to the read-back."""
+        self.confirmed = True
+        self.notes.append("confirmed by caller read-back")
+
+    def reject(self) -> None:
+        """Caller said the read-back was wrong - discard, do not keep a guess."""
+        self.value = None
+        self.raw_text = None
+        self.confidence = 0.0
+        self.confirmed = False
+        self.source = "rejected"
+        self.notes.append("rejected at read-back, cleared")
+
+
+@dataclass
+class SlotSet:
+    patient_name: Slot = field(default_factory=lambda: Slot("patient_name"))
+    phone: Slot = field(default_factory=lambda: Slot("phone"))
+    appointment_time: Slot = field(default_factory=lambda: Slot("appointment_time"))
+    procedure: Slot = field(default_factory=lambda: Slot("procedure"))
+
+    def all_slots(self) -> list[Slot]:
+        return [self.patient_name, self.phone, self.appointment_time, self.procedure]
+
+    @property
+    def missing(self) -> list[Slot]:
+        return [s for s in self.all_slots() if not s.filled]
+
+    @property
+    def pending_confirmation(self) -> list[Slot]:
+        return [s for s in self.all_slots() if s.needs_confirmation]
+
+    @property
+    def bookable(self) -> bool:
+        """Every slot filled AND every slot either confident or confirmed."""
+        return all(s.usable for s in self.all_slots())
+
+
+# --------------------------------------------------------------------------
+# Extraction
+# --------------------------------------------------------------------------
+PHONE_SPAN = re.compile(
+    r"((?:\+?\d[\d\s\-]{7,}\d)|(?:(?:\b(?:zero|oh|one|two|three|four|five|six|"
+    r"seven|eight|nine|double|triple)\b[\s,\-]*){7,}))",
+    re.IGNORECASE,
+)
+NAME_SPAN = re.compile(
+    r"(?:my name is|this is|i am|i'm|name is)\s+([^\d,.;]{2,40})", re.IGNORECASE
+)
+TIME_SPAN = re.compile(
+    r"((?:today|tomorrow|day after tomorrow|next\s+\w+day|monday|tuesday|wednesday|"
+    r"thursday|friday|saturday|sunday|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)"
+    r"[^,.;]{0,30})",
+    re.IGNORECASE,
+)
+
+
+def _asr_confidence(word_confidences: dict[str, float] | None, span: str) -> float:
+    """Mean ASR confidence over the words in a span.
+
+    Real ASR returns per-word confidence. Averaging over the span that
+    produced a value is what makes slot-level confidence meaningful rather
+    than a single number for the whole utterance.
+    """
+    if not word_confidences:
+        return 0.85          # no ASR metadata: assume decent but not certain
+    words = re.findall(r"[\w']+", span.lower())
+    scores = [word_confidences[w] for w in words if w in word_confidences]
+    return sum(scores) / len(scores) if scores else 0.85
+
+
+def extract_slots(
+    transcript: str,
+    reference_time: datetime,
+    word_confidences: dict[str, float] | None = None,
+    existing: SlotSet | None = None,
+) -> SlotSet:
+    """Fill what this utterance supports. Never overwrite a confirmed slot."""
+    slots = existing or SlotSet()
+
+    # -- phone -------------------------------------------------------------
+    if not slots.phone.confirmed:
+        m = PHONE_SPAN.search(transcript)
+        if m:
+            span = m.group(1).strip()
+            parsed = normalise_phone(span)
+            if parsed:
+                conf = _asr_confidence(word_confidences, span) - parsed.confidence_penalty
+                # Digits carry no redundancy - no language model can catch a
+                # wrong one - so ASR confidence is discounted for phone spans.
+                conf *= 0.95
+                slots.phone = Slot(
+                    "phone", raw_text=span, value=parsed.e164,
+                    confidence=max(0.0, min(1.0, conf)), source="asr",
+                    notes=[f"country {parsed.country}"]
+                    + (["digit pattern not recognised for IN/AE"]
+                       if parsed.confidence_penalty else []),
+                )
+
+    # -- name --------------------------------------------------------------
+    if not slots.patient_name.confirmed:
+        m = NAME_SPAN.search(transcript)
+        if m:
+            span = m.group(1).strip()
+            parsed = normalise_name(span)
+            if parsed:
+                conf = _asr_confidence(word_confidences, span)
+                # Proper nouns are out-of-vocabulary for most ASR and are the
+                # single most misrecognised field in clinic calls.
+                conf *= 0.90
+                slots.patient_name = Slot(
+                    "patient_name", raw_text=span, value=parsed,
+                    confidence=max(0.0, min(1.0, conf)), source="asr",
+                )
+
+    # -- appointment time --------------------------------------------------
+    if not slots.appointment_time.confirmed:
+        m = TIME_SPAN.search(transcript)
+        if m:
+            span = m.group(1).strip()
+            parsed = normalise_datetime(span, reference_time)
+            if parsed:
+                conf = _asr_confidence(word_confidences, span)
+                notes = []
+                if parsed.time_was_vague:
+                    # "tomorrow morning" is a date, not an appointment.
+                    conf *= 0.80
+                    notes.append("time of day inferred, not stated")
+                if parsed.when < reference_time:
+                    conf *= 0.5
+                    notes.append("resolved to a past time")
+                slots.appointment_time = Slot(
+                    "appointment_time", raw_text=span, value=parsed.when,
+                    confidence=max(0.0, min(1.0, conf)), source="asr", notes=notes,
+                )
+
+    # -- procedure ---------------------------------------------------------
+    if not slots.procedure.confirmed:
+        lowered = transcript.lower()
+        for code, keywords in PROCEDURES.items():
+            hit = next((k for k in keywords if k in lowered), None)
+            if hit:
+                conf = _asr_confidence(word_confidences, hit)
+                # Closed vocabulary: a near-miss still lands on a valid value,
+                # so this is the most reliable slot on the call.
+                slots.procedure = Slot(
+                    "procedure", raw_text=hit, value=code,
+                    confidence=max(0.0, min(1.0, conf)), source="asr",
+                    notes=[f"matched keyword {hit!r}"],
+                )
+                break
+
+    return slots
+
+
+def readback_prompt(slot: Slot, language: str = "en") -> str:
+    """The question the agent asks to confirm a low-confidence slot.
+
+    Read-backs are per-slot and specific. "Did I get that right?" after a
+    four-field summary produces a yes that means nothing - the caller cannot
+    hold four values in mind and check each one.
+    """
+    if slot.name == "phone":
+        digits = " ".join(str(slot.value).replace("+", ""))
+        return f"Let me confirm your number: {digits}. Is that correct?"
+    if slot.name == "appointment_time":
+        return (
+            f"That's {slot.value:%A %d %B} at {slot.value:%I:%M %p}. "
+            f"Shall I book that?"
+        )
+    if slot.name == "patient_name":
+        return f"I have your name as {slot.value}. Did I get that right?"
+    return f"You'd like a {str(slot.value).replace('_', ' ')}. Is that right?"
