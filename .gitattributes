@@ -1,0 +1,50 @@
+# Normalise line endings.
+#
+# Without this, the checked-in line endings depend on each contributor's
+# core.autocrlf setting, and a Windows clone can produce a diff on every file
+# it touches without any content having changed. LF in the repository, LF on
+# checkout, on every platform.
+* text=auto eol=lf
+
+# Explicit types, so a future file with an unusual extension is not guessed at.
+*.py     text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.json   text eol=lf
+*.ipynb  text eol=lf
+*.csv    text eol=lf
+*.cfg    text eol=lf
+*.ini    text eol=lf
+*.toml   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.lock   text eol=lf
+Pipfile  text eol=lf
+
+# Binary. None are committed today; declared so that adding one later cannot
+# corrupt it through newline translation.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.pdf    binary
+*.pt     binary
+*.pth    binary
+*.npy    binary
+*.npz    binary
+*.gz     binary
+*.zip    binary
+
+# The NASA POWER cache is data, not source. Marking it linguist-generated
+# keeps 11,000 rows of CSV out of GitHub's language statistics and collapses
+# it in diffs, where a row-by-row comparison is never what anyone wants.
+data/raw/** linguist-generated=true
+
+# Notebooks carry base64-encoded figure output, so a diff is thousands of
+# unreadable lines. They stay diffable on request but are marked generated:
+# scripts/build_notebooks.py is the source, the .ipynb is the artefact.
+#
+# Note this also removes them from GitHub's language bar, which would
+# otherwise report this repository as "Jupyter Notebook" on the strength of
+# the embedded PNGs. Delete this line if you would rather it did.
+notebooks/*.ipynb linguist-generated=true
