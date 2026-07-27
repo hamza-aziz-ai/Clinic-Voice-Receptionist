@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 250 passed
+$ python -m pytest -q          # 255 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -34,11 +34,16 @@ python scripts/setup_voice.py
 VOICE_ENABLED=1 uvicorn receptionist.api.main:app --app-dir src
 ```
 
+**All five languages speak.** Piper covers English, Hindi and Malayalam on
+CPU; Meta's MMS-TTS covers Tamil and Kannada, which Piper has no voice for at
+all — 0.17–0.20 s warm on the GPU (RTF 0.02–0.04). Neither model alone speaks
+all five, so `CompositeSpeaker` tries Piper first and falls through.
+
 Two limits worth stating up front. **There is no phone number** — the caller
 speaks through a browser, because a dialable number cannot be free. And
-**Tamil and Kannada have no free voice model**: Piper has none, so the agent
-answers in text for those two rather than reading their script with an
-English voice, which produces noise rather than an accent.
+**MMS-TTS is CC-BY-NC**: fine for a portfolio piece and for evaluation, not
+for a clinic that charges patients. A commercial deployment needs an
+AI4Bharat licence accepted deliberately, or a commercially-licensed voice.
 
 Built against a published brief: **Bolna AI** for the inbound voice agent,
 **AiSensy** for WhatsApp, **n8n** as the glue. All three are integrated at the

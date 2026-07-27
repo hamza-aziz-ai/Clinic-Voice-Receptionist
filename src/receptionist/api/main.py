@@ -186,12 +186,19 @@ def _voice():
     global _TRANSCRIBER, _SPEAKER
     if _TRANSCRIBER is None:
         from ..asr.whisper_local import WhisperTranscriber
+        from ..tts.mms_tts import CompositeSpeaker, MMSSpeaker
         from ..tts.piper_tts import PiperSpeaker
 
         _TRANSCRIBER = WhisperTranscriber(
             settings.whisper_model, device=settings.whisper_device
         )
-        _SPEAKER = PiperSpeaker(settings.piper_voice_dir)
+        # Piper for the three languages it covers - fast, on CPU, better
+        # sounding - and MMS for Tamil and Kannada, which Piper has no voice
+        # for at all. Neither model alone speaks all five.
+        _SPEAKER = CompositeSpeaker(
+            PiperSpeaker(settings.piper_voice_dir),
+            MMSSpeaker(device=settings.whisper_device),
+        )
     return _TRANSCRIBER, _SPEAKER
 
 

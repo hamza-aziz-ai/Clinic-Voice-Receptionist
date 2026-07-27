@@ -158,3 +158,67 @@ def test_an_unknown_call_is_404(voice_app):
     r = client.post("/calls/nope/audio",
                     files={"audio": ("t.webm", b"x", "audio/webm")})
     assert r.status_code == 404
+
+
+# ------------------------------------------------- the ta/kn gap, closed
+def test_mms_covers_the_two_languages_piper_cannot_speak():
+    """Piper has no Tamil or Kannada voice. MMS does, which is the only
+    reason all five languages can now be spoken at all."""
+    from receptionist.tts.mms_tts import MMS_LANGUAGES
+    for language in UNVOICED_LANGUAGES:
+        assert language in MMS_LANGUAGES
+
+
+def test_every_supported_language_has_some_voice():
+    """The point of the composite: neither model alone speaks all five."""
+    from receptionist.tts.mms_tts import MMS_LANGUAGES
+    covered = set(VOICES) | set(MMS_LANGUAGES)
+    assert {"en", "ta", "kn", "ml", "hi"} <= covered
+
+
+def test_the_composite_prefers_piper_and_falls_back_to_mms():
+    """Piper runs on CPU at RTF 0.05 and sounds better where it has a voice;
+    trying it first keeps the common path off the GPU that Whisper is using."""
+    from receptionist.tts.mms_tts import CompositeSpeaker
+
+    class Fake:
+        def __init__(self, langs, audio):
+            self.langs, self.audio, self.calls = langs, audio, []
+
+        def can_speak(self, language):
+            return language in self.langs
+
+        def synthesize(self, text, language="en"):
+            self.calls.append(language)
+            return self.audio if language in self.langs else None
+
+    piper = Fake({"en", "hi", "ml"}, b"PIPER")
+    mms = Fake({"en", "hi", "ml", "ta", "kn"}, b"MMS")
+    speaker = CompositeSpeaker(piper, mms)
+
+    assert speaker.synthesize("hello", "en") == b"PIPER"
+    assert mms.calls == []                       # never consulted for English
+    assert speaker.synthesize("வணக்கம்", "ta") == b"MMS"
+    assert speaker.can_speak("kn")
+
+
+def test_a_piper_failure_falls_through_to_mms():
+    """A missing voice file should degrade to the other engine, not silence."""
+    from receptionist.tts.mms_tts import CompositeSpeaker
+
+    class Dead:
+        def can_speak(self, language): return True
+        def synthesize(self, text, language="en"): return None
+
+    class Live:
+        def can_speak(self, language): return True
+        def synthesize(self, text, language="en"): return b"MMS"
+
+    assert CompositeSpeaker(Dead(), Live()).synthesize("hi", "hi") == b"MMS"
+
+
+def test_the_non_commercial_licence_is_recorded():
+    """MMS-TTS is CC-BY-NC. Fine for a portfolio piece, not for a clinic that
+    charges patients - a legal constraint that does not go away by ignoring it."""
+    from receptionist.tts.mms_tts import LICENCE
+    assert "non-commercial" in LICENCE.lower()

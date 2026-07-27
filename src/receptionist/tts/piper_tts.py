@@ -1,21 +1,14 @@
-"""Piper text-to-speech. Free, offline, and missing two of our languages.
+"""Piper text-to-speech: English, Hindi and Malayalam, on CPU.
 
-THE GAP, STATED FIRST
+Piper has **no voice for Tamil or Kannada**, and returns None for them rather
+than substituting an English one. An English model fed Tamil script does not
+produce accented Tamil, it produces noise, and a caller hearing noise where
+their language should be is worse served than one who gets text.
 
-Piper has voices for English, Hindi and Malayalam. It has **none for Tamil or
-Kannada**. On a project whose entire subject is these five languages, that is
-not a footnote - two of the five cannot be spoken at all.
-
-The system refuses to speak those rather than substituting an English voice.
-An English model fed Tamil script does not produce accented Tamil, it
-produces noise, and a caller hearing noise where their language should be is
-worse served than one who gets text. ``synthesize`` returns None and says
-which language it could not voice.
-
-Closing that gap means AI4Bharat's IndicF5 or Indic Parler-TTS, which cover
-all four Indic languages here and need torch. That is a real install, not a
-config change, and it is the next piece of work if the Tamil and Kannada
-demos have to be audible.
+Those two are covered by MMS instead - see ``mms_tts.CompositeSpeaker``,
+which tries Piper first and falls through. Piper stays the preferred engine
+where it has a voice: it runs on CPU at real-time factor 0.05, which keeps
+the common path off the GPU that Whisper is already holding.
 """
 from __future__ import annotations
 

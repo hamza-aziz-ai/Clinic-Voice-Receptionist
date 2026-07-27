@@ -4,14 +4,9 @@ verify_ssl = true
 name = "pypi"
 
 [[source]]
-url = "https://download.pytorch.org/whl/cu132"
-verify_ssl = true
-name = "downloadpytorch"
-
-[[source]]
 url = "https://download.pytorch.org/whl/cu130"
 verify_ssl = true
-name = "downloadpytorch-260"
+name = "downloadpytorch"
 
 [packages]
 fastapi = "*"
@@ -28,8 +23,12 @@ ollama = "*"
 faster-whisper = "*"
 piper-tts = "*"
 torch = {version = "*", index = "downloadpytorch"}
-torchvision = {version = "*", index = "downloadpytorch"}
-torchaudio = {version = "*", index = "downloadpytorch-260"}
+torchaudio = {version = "*", index = "downloadpytorch"}
+transformers = "*"
+huggingface = "*"
+parler-tts = "*"
+onnx = "*"
+tiktoken = "*"
 
 [dev-packages]
 pytest = "*"
