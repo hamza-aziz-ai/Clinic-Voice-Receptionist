@@ -137,3 +137,42 @@ def test_exported_file_is_valid_json_n8n_can_import():
     assert data["name"] and data["nodes"] and data["connections"]
     for node in data["nodes"]:
         assert {"parameters", "name", "type", "position"} <= set(node)
+
+
+# ------------------------------------------------- verified against real n8n
+# The three defects below were all invisible to schema inspection and were
+# found by importing this file into n8n 2.31.7 and POSTing real payloads.
+def test_the_workflow_carries_an_id():
+    """`n8n import:workflow` fails on a NOT NULL constraint against
+    workflow_entity.id without one. Stable, so a re-import updates the
+    workflow rather than creating a duplicate beside it."""
+    workflow = build_workflow()
+    assert workflow["id"]
+    assert workflow["id"] == json.loads(EXPORTED.read_text(encoding="utf-8"))["id"]
+
+
+def test_the_webhook_node_carries_a_webhook_id():
+    """n8n keys the registered production URL on webhookId. Without one the
+    workflow activates, reports itself active, and every POST to its path
+    returns "the requested webhook is not registered"."""
+    webhook = nodes_by_name()["Bolna Post-Call"]
+    assert webhook.get("webhookId"), "no webhookId - the path will never bind"
+
+
+def test_the_alert_node_cannot_swallow_the_acknowledgement():
+    """Observed live: when the ops alert errored, the run stopped there, the
+    Respond node never fired, and the webhook returned an empty body - so
+    Bolna would retry a call the service had correctly declined, forever."""
+    alert = nodes_by_name()["Alert Reception"]
+    assert alert.get("onError") == "continueRegularOutput"
+
+
+def test_env_access_requirement_is_documented_in_the_workflow():
+    """n8n blocks $env in expressions by default, which silently resolves
+    every URL in this workflow to undefined. The workflow is useless without
+    the operator knowing that, so the requirement travels with the file."""
+    blob = to_json()
+    assert "$env." in blob
+    assert "N8N_BLOCK_ENV_ACCESS_IN_NODE" in blob, (
+        "the deployment requirement must be stated in the workflow itself"
+    )

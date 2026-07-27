@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 224 passed
+$ python -m pytest -q          # 228 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -402,7 +402,24 @@ keys match the service's own `Outcome` type (adding an outcome later breaks the
 test rather than falling through a default), and that nothing key-shaped was
 written into the committed JSON.
 
-`integrations/n8n/clinic-receptionist.json` imports directly.
+`integrations/n8n/clinic-receptionist.json` imports directly, and has been
+**run** — imported into n8n 2.31.7 in Docker, activated, and driven with real
+Bolna-shaped payloads through every branch: booked, needs_callback,
+not_actionable, and a redelivery that produced no second appointment.
+
+Doing that found three defects no amount of reading the JSON would have:
+
+| Defect | Symptom |
+|---|---|
+| No top-level `id` | `import:workflow` fails on a NOT NULL constraint |
+| No `webhookId` on the webhook node | Workflow activates and *reports itself active*, but every POST returns "webhook is not registered" |
+| Ops alert could halt the run | When the alert errored the Respond node never fired — 200 with an empty body, so Bolna retries a correctly-declined call forever |
+
+And one deployment requirement that is now stated inside the workflow file
+itself: **n8n blocks `$env` in expressions by default.** Left blocked, every
+URL resolves to undefined, the nodes fail with `access to env vars denied`,
+and the webhook returns 200 while nothing reaches the service. It needs
+`N8N_BLOCK_ENV_ACCESS_IN_NODE=false`.
 
 ---
 

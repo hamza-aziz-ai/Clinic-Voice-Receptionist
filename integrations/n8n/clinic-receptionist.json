@@ -1,5 +1,7 @@
 {
+  "id": "clinic-receptionist",
   "name": "Clinic Voice Receptionist",
+  "active": false,
   "nodes": [
     {
       "parameters": {
@@ -15,7 +17,8 @@
       "position": [
         -320,
         0
-      ]
+      ],
+      "webhookId": "6f1e2a7c-3b40-4d21-9c8e-5a7d0b1e4f92"
     },
     {
       "parameters": {
@@ -165,7 +168,8 @@
       "position": [
         400,
         0
-      ]
+      ],
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -378,7 +382,9 @@
     "executionOrder": "v1"
   },
   "pinData": {},
+  "tags": [],
   "meta": {
+    "setup": "REQUIRED: run n8n with N8N_BLOCK_ENV_ACCESS_IN_NODE=false. n8n blocks $env in expressions by default, and every URL in this workflow is an $env reference - blocked, they resolve to undefined, the HTTP nodes fail with 'access to env vars denied', and the webhook returns 200 with an empty body while nothing reaches the service. Then set RECEPTIONIST_URL, BOLNA_WEBHOOK_SECRET and OPS_ALERT_URL. Verified against n8n 2.31.7.",
     "description": "Glue only. Every decision that could create an appointment lives in the receptionist service, which is the only place the confidence gate and the booking lock can be enforced together and tested."
   }
 }

@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+WORKFLOW_ID = "clinic-receptionist"
 WORKFLOW_NAME = "Clinic Voice Receptionist"
 
 # Placeholders resolved by n8n from its own environment, never by this
@@ -58,9 +59,19 @@ OUTCOMES = ("booked", "needs_callback", "escalated", "not_actionable")
 DISPATCH_INTERVAL_MINUTES = 15
 
 
+# Stable UUID for the webhook node. n8n keys the registered production URL on
+# `webhookId`, and an imported node without one activates without ever binding
+# the path: the workflow reports active and POSTing to it returns
+# "webhook is not registered". The editor generates this on node creation, so
+# a hand-built workflow has to supply it. Fixed rather than random so
+# re-importing keeps the same URL.
+BOLNA_WEBHOOK_ID = "6f1e2a7c-3b40-4d21-9c8e-5a7d0b1e4f92"
+
+
 def _node(name: str, type_: str, position: list[int], parameters: dict[str, Any],
-          type_version: int = 1) -> dict[str, Any]:
-    return {
+          type_version: int = 1, webhook_id: str | None = None,
+          on_error: str | None = None) -> dict[str, Any]:
+    node = {
         "parameters": parameters,
         "id": name.lower().replace(" ", "-"),
         "name": name,
@@ -68,6 +79,11 @@ def _node(name: str, type_: str, position: list[int], parameters: dict[str, Any]
         "typeVersion": type_version,
         "position": position,
     }
+    if webhook_id:
+        node["webhookId"] = webhook_id
+    if on_error:
+        node["onError"] = on_error
+    return node
 
 
 def build_workflow() -> dict[str, Any]:
@@ -86,6 +102,7 @@ def build_workflow() -> dict[str, Any]:
                 ),
             },
             type_version=2,
+            webhook_id=BOLNA_WEBHOOK_ID,
         ),
         _node(
             "Ingest Call", "n8n-nodes-base.httpRequest", [-100, 0],
@@ -158,6 +175,13 @@ def build_workflow() -> dict[str, Any]:
                 ),
             },
             type_version=4,
+            # A failed alert must not swallow the acknowledgement. Observed
+            # live: when this node errored the run stopped here, the Respond
+            # node never fired, and the webhook returned an empty body - so
+            # Bolna would retry a call the service had correctly declined,
+            # forever. Losing the alert is bad; looping the delivery is worse,
+            # and the callback is still recorded in the service either way.
+            on_error="continueRegularOutput",
         ),
         _node(
             "Ignore Incomplete Call", "n8n-nodes-base.noOp", [400, 180],
@@ -238,12 +262,30 @@ def build_workflow() -> dict[str, Any]:
     }
 
     return {
+        # Required by `n8n import:workflow` - without it the CLI fails on a
+        # NOT NULL constraint against workflow_entity.id. Found by actually
+        # importing the file rather than by reading the docs, and a stable
+        # value means a re-import updates the workflow instead of creating a
+        # duplicate beside it.
+        "id": WORKFLOW_ID,
         "name": WORKFLOW_NAME,
+        "active": False,
         "nodes": nodes,
         "connections": connections,
         "settings": {"executionOrder": "v1"},
         "pinData": {},
+        "tags": [],
         "meta": {
+            "setup": (
+                "REQUIRED: run n8n with N8N_BLOCK_ENV_ACCESS_IN_NODE=false. "
+                "n8n blocks $env in expressions by default, and every URL in "
+                "this workflow is an $env reference - blocked, they resolve to "
+                "undefined, the HTTP nodes fail with 'access to env vars "
+                "denied', and the webhook returns 200 with an empty body while "
+                "nothing reaches the service. Then set RECEPTIONIST_URL, "
+                "BOLNA_WEBHOOK_SECRET and OPS_ALERT_URL. Verified against "
+                "n8n 2.31.7."
+            ),
             "description": (
                 "Glue only. Every decision that could create an appointment "
                 "lives in the receptionist service, which is the only place "
