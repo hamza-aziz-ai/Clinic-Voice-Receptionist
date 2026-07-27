@@ -1,0 +1,384 @@
+{
+  "name": "Clinic Voice Receptionist",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bolna-post-call",
+        "responseMode": "responseNode",
+        "notes": "Bolna posts the execution object here after the call ends. Restrict this URL to Bolna's egress address at the reverse proxy; n8n's own webhook has no signature check either."
+      },
+      "id": "bolna-post-call",
+      "name": "Bolna Post-Call",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RECEPTIONIST_URL }}/webhooks/bolna",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOLNA_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "retry": {
+            "retryOnFail": true,
+            "maxTries": 3
+          }
+        },
+        "notes": "The service decides. This node forwards the payload and reads the outcome; it must never post a booking itself."
+      },
+      "id": "ingest-call",
+      "name": "Ingest Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.outcome }}",
+                    "rightValue": "booked",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "booked"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.outcome }}",
+                    "rightValue": "needs_callback",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "needs_callback"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.outcome }}",
+                    "rightValue": "escalated",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "escalated"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.outcome }}",
+                    "rightValue": "not_actionable",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "not_actionable"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        },
+        "notes": "No fallback branch on purpose. An outcome added to the service later should stop here visibly rather than fall into whichever branch happens to be first."
+      },
+      "id": "route-outcome",
+      "name": "Route Outcome",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        140,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "notes": "Nothing to do. The confirmation WhatsApp was sent by the service during ingest, and the reminder and review request are queued for the scheduled dispatch below."
+      },
+      "id": "booked",
+      "name": "Booked",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPS_ALERT_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"call_id\": $json.call_id, \"outcome\": $json.outcome, \"reason\": $json.reason, \"unresolved\": $json.unresolved }) }}",
+        "options": {
+          "retry": {
+            "retryOnFail": true,
+            "maxTries": 3
+          }
+        },
+        "notes": "needs_callback and escalated both land here. The reason names the specific slots that failed, so reception knows what to ask instead of replaying the recording."
+      },
+      "id": "alert-reception",
+      "name": "Alert Reception",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "notes": "Ringing, busy or failed executions carry no caller intent. Nothing to route and nobody to call back."
+      },
+      "id": "ignore-incomplete-call",
+      "name": "Ignore Incomplete Call",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        400,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ \"received\": true }) }}",
+        "notes": "Always 200 once the service has answered. Bolna retries on non-2xx, and a call correctly declined is not a delivery failure - answering 5xx loops forever."
+      },
+      "id": "acknowledge",
+      "name": "Acknowledge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        },
+        "notes": "Reminders and review requests are queued with a send_after and need something to come back for them."
+      },
+      "id": "every-15-minutes",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RECEPTIONIST_URL }}/messages/dispatch",
+        "options": {
+          "retry": {
+            "retryOnFail": true,
+            "maxTries": 2
+          }
+        },
+        "notes": "The service decides what is due, what expired and what a cancelled booking cancels. This node only triggers a pass."
+      },
+      "id": "dispatch-due-messages",
+      "name": "Dispatch Due Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -100,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.failed + $json.expired }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "notes": "Expired counts as a fault, not as routine. A message that expired means this schedule did not run in time."
+      },
+      "id": "alert-on-failed-sends",
+      "name": "Alert On Failed Sends",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        140,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Bolna Post-Call": {
+      "main": [
+        [
+          {
+            "node": "Ingest Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest Call": {
+      "main": [
+        [
+          {
+            "node": "Route Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Outcome": {
+      "main": [
+        [
+          {
+            "node": "Booked",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Reception",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Reception",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignore Incomplete Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booked": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Reception": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ignore Incomplete Call": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Due Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Due Messages": {
+      "main": [
+        [
+          {
+            "node": "Alert On Failed Sends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "description": "Glue only. Every decision that could create an appointment lives in the receptionist service, which is the only place the confidence gate and the booking lock can be enforced together and tested."
+  }
+}
