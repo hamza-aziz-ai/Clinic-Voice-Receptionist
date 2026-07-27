@@ -183,3 +183,67 @@ def test_name_boundary_covers_every_procedure_word():
                 assert word in NAME_BOUNDARY, (
                     f"procedure word {word!r} would be absorbed into a patient name"
                 )
+
+
+def test_a_symptom_sentence_is_not_read_as_a_name():
+    """"I am" and "I'm" trigger the name pattern and are also how people
+    describe a symptom. "I am having ache in my left jaw" produced the patient
+    name "Having" at 0.77 - above the 0.75 gate, so it booked and went out on
+    the WhatsApp confirmation with no read-back."""
+    from receptionist.nlu.normalize import normalise_name
+    for span in ("having ache in my left jaw", "in pain", "feeling sore",
+                 "just calling about my tooth", "not sure what it is",
+                 "wondering if you have anything today"):
+        assert normalise_name(span) is None, span
+
+
+def test_real_names_still_survive_the_stop_list():
+    from receptionist.nlu.normalize import normalise_name
+    for name in ("Hamza Aziz", "Priya Menon", "Ahmed Al Rashid", "അഞ്ജലി നായർ"):
+        assert normalise_name(name) == name
+
+
+def test_a_trusted_slot_is_not_overwritten_by_a_later_utterance():
+    """A caller states each detail once. A later sentence matching the same
+    pattern is far more likely to be a false positive than a correction, and
+    real corrections arrive through a rejected read-back, which clears first."""
+    from datetime import datetime as _dt
+    from receptionist.nlu.slots import extract_slots as _extract
+
+    now = _dt(2026, 7, 27, 10, 0)
+    slots = _extract("Hi, my name is Hamza Aziz.", now)
+    assert slots.patient_name.usable
+
+    slots = _extract("I am having ache in my left jaw", now, existing=slots)
+    assert slots.patient_name.value == "Hamza Aziz"
+    assert slots.procedure.value == "checkup"
+
+
+def test_a_low_confidence_slot_can_still_be_improved():
+    """The rule protects trusted values, not unverified ones - a caller
+    repeating a badly heard number must be able to correct it."""
+    from datetime import datetime as _dt
+    from receptionist.nlu.slots import extract_slots as _extract
+
+    now = _dt(2026, 7, 27, 10, 0)
+    slots = _extract("my name is Priya Menon", now, {"priya": 0.3, "menon": 0.3})
+    assert not slots.patient_name.usable
+    # extract_slots mutates and returns the SlotSet it was given, so the
+    # before value has to be captured rather than the object.
+    was = slots.patient_name.confidence
+
+    slots = _extract("my name is Priya Menon", now,
+                     {"priya": 0.95, "menon": 0.95}, existing=slots)
+    assert slots.patient_name.usable
+    assert slots.patient_name.confidence > was
+
+
+def test_a_confirmed_slot_is_never_replaced():
+    from datetime import datetime as _dt
+    from receptionist.nlu.slots import extract_slots as _extract
+
+    now = _dt(2026, 7, 27, 10, 0)
+    slots = _extract("my name is Priya Menon", now, {"priya": 0.3, "menon": 0.3})
+    slots.patient_name.confirm()
+    slots = _extract("this is Someone Else", now, existing=slots)
+    assert slots.patient_name.value == "Priya Menon"

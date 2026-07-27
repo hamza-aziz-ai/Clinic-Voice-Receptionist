@@ -235,6 +235,18 @@ CLINICAL_BOUNDARY = {
     "swollen", "swelling", "bleeding", "sensitive", "sensitivity",
     "wisdom", "tooth", "teeth", "abscess", "infected", "infection",
     "broken", "chipped", "cracked", "loose", "stuck", "toothache",
+    # "I am" and "I'm" are name triggers, and they are also how people
+    # describe a symptom: "I am having ache in my left jaw" produced the
+    # patient name "Having" at 0.77 - above the 0.75 gate, so it booked and
+    # went on the WhatsApp confirmation with no read-back. "In pain" gave
+    # "In"; "just calling about my tooth" gave "Just".
+    #
+    # Every one of these is a word no caller's name begins with, so a span
+    # starting with one yields no name at all rather than its first word.
+    "having", "getting", "feeling", "experiencing", "suffering", "wanting",
+    "needing", "looking", "trying", "wondering", "hoping", "ringing",
+    "just", "not", "in", "from", "so", "really", "still", "here", "there",
+    "sorry", "hello", "hi", "yes", "no", "ok", "okay", "thanks", "thank",
 }
 NAME_BOUNDARY |= CLINICAL_BOUNDARY
 

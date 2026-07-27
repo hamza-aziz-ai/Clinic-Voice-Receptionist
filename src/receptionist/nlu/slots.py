@@ -192,6 +192,33 @@ def _asr_confidence(word_confidences: dict[str, float] | None, span: str) -> flo
     return sum(scores) / len(scores) if scores else 0.85
 
 
+def _replaces(slot: Slot, new_confidence: float) -> bool:
+    """May a freshly extracted value take this slot?
+
+    Without this check every slot was overwritten by whatever the latest
+    utterance happened to match. A real call captured "Hamza Aziz" correctly,
+    then the caller said "I am having ache in my left jaw" - which the name
+    pattern also matches - and the good name was silently replaced. Nothing
+    was flagged, because the replacement scored the same 0.77 the original
+    did.
+
+    A caller states each detail once. A later sentence that happens to fit
+    the pattern is far more likely to be a false positive than a correction,
+    and genuine corrections do not arrive this way: they come through a
+    rejected read-back, which clears the slot first.
+    """
+    if slot.confirmed:
+        return False
+    if not slot.filled:
+        return True
+    # Filled and already trusted - leave it alone.
+    if not slot.needs_confirmation:
+        return False
+    # Filled but below threshold: a clearer restatement may still improve it,
+    # which is how a caller repeating a bad number gets a better reading.
+    return new_confidence > slot.confidence
+
+
 def extract_slots(
     transcript: str,
     reference_time: datetime,
@@ -212,13 +239,15 @@ def extract_slots(
                 # Digits carry no redundancy - no language model can catch a
                 # wrong one - so ASR confidence is discounted for phone spans.
                 conf *= 0.95
-                slots.phone = Slot(
-                    "phone", raw_text=span, value=parsed.e164,
-                    confidence=max(0.0, min(1.0, conf)), source="asr",
-                    notes=[f"country {parsed.country}"]
-                    + (["digit pattern not recognised for IN/AE"]
-                       if parsed.confidence_penalty else []),
-                )
+                conf = max(0.0, min(1.0, conf))
+                if _replaces(slots.phone, conf):
+                    slots.phone = Slot(
+                        "phone", raw_text=span, value=parsed.e164,
+                        confidence=conf, source="asr",
+                        notes=[f"country {parsed.country}"]
+                        + (["digit pattern not recognised for IN/AE"]
+                           if parsed.confidence_penalty else []),
+                    )
 
     # -- name --------------------------------------------------------------
     if not slots.patient_name.confirmed:
@@ -230,11 +259,12 @@ def extract_slots(
                 conf = _asr_confidence(word_confidences, span)
                 # Proper nouns are out-of-vocabulary for most ASR and are the
                 # single most misrecognised field in clinic calls.
-                conf *= 0.90
-                slots.patient_name = Slot(
-                    "patient_name", raw_text=span, value=parsed,
-                    confidence=max(0.0, min(1.0, conf)), source="asr",
-                )
+                conf = max(0.0, min(1.0, conf * 0.90))
+                if _replaces(slots.patient_name, conf):
+                    slots.patient_name = Slot(
+                        "patient_name", raw_text=span, value=parsed,
+                        confidence=conf, source="asr",
+                    )
 
     # -- appointment time --------------------------------------------------
     if not slots.appointment_time.confirmed:
@@ -250,6 +280,10 @@ def extract_slots(
             parse_input = f"{pending.day:02d}/{pending.month:02d} {transcript.strip()}"
 
         parsed = normalise_datetime(parse_input, reference_time) if parse_input else None
+
+        if parsed and not _replaces(slots.appointment_time, 0.0 if parsed.time_was_vague
+                                    else _asr_confidence(word_confidences, span or transcript)):
+            parsed = None       # already have a time we trust; do not restate it
 
         if parsed and parsed.time_was_vague:
             # "Saturday morning" is a day, not an appointment. The old code
@@ -290,25 +324,29 @@ def extract_slots(
 
         if named:
             code, hit = named
-            conf = _asr_confidence(word_confidences, hit)
+            conf = max(0.0, min(1.0, _asr_confidence(word_confidences, hit)))
             # Closed vocabulary: a near-miss still lands on a valid value,
             # so this is the most reliable slot on the call.
-            slots.procedure = Slot(
-                "procedure", raw_text=hit, value=code,
-                confidence=max(0.0, min(1.0, conf)), source="asr",
-                notes=[f"matched keyword {hit!r}"],
-            )
+            if _replaces(slots.procedure, conf):
+                slots.procedure = Slot(
+                    "procedure", raw_text=hit, value=code,
+                    confidence=conf, source="asr",
+                    notes=[f"matched keyword {hit!r}"],
+                )
         else:
             symptom = next((s for s in SYMPTOM_TERMS if s in lowered), None)
             if symptom:
                 # Inferred, not stated. Deliberately scored below threshold so
                 # it is read back before anything is booked.
                 conf = _asr_confidence(word_confidences, symptom) * SYMPTOM_CONFIDENCE_FACTOR
-                slots.procedure = Slot(
-                    "procedure", raw_text=symptom, value="checkup",
-                    confidence=max(0.0, min(1.0, conf)), source="symptom",
-                    notes=[f"inferred from symptom {symptom!r}; not stated by caller"],
-                )
+                conf = max(0.0, min(1.0, conf))
+                if _replaces(slots.procedure, conf):
+                    slots.procedure = Slot(
+                        "procedure", raw_text=symptom, value="checkup",
+                        confidence=conf, source="symptom",
+                        notes=[f"inferred from symptom {symptom!r}; "
+                               "not stated by caller"],
+                    )
 
     return slots
 
