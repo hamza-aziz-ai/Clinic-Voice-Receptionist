@@ -34,6 +34,20 @@ class Settings:
         default_factory=lambda: _csv("BOLNA_EXTRA_SOURCE_IPS")
     )
 
+    # "aisensy", "telegram", or "" to auto-detect from whichever credential
+    # is present. Explicit beats inferred once there is more than one channel:
+    # a stale AISENSY_API_KEY in the environment silently deciding where
+    # patient messages go is not a thing anyone should have to debug.
+    messaging_provider: str = field(
+        default_factory=lambda: os.environ.get("MESSAGING_PROVIDER", "").strip().lower()
+    )
+
+    # Free of charge, unlike WhatsApp. Note Telegram addresses a chat_id, not
+    # a phone number - see messaging/telegram.py.
+    telegram_bot_token: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    )
+
     aisensy_api_key: str = field(
         default_factory=lambda: os.environ.get("AISENSY_API_KEY", "")
     )

@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 228 passed
+$ python -m pytest -q          # 239 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -377,6 +377,39 @@ sending:
 Expired is counted separately from cancelled because a rising expired count
 means the dispatcher isn't running — an operational fault, not a patient
 decision.
+
+---
+
+## Running it without paying anyone
+
+Everything metered has a free replacement except two things, and no amount of
+engineering changes either.
+
+**A dialable phone number is a regulated, metered resource.** Free means the
+caller reaches the clinic through a browser over WebRTC, not a handset.
+
+**WhatsApp is Meta's**, and Meta bills per template message from the first
+send — the free-conversation tier is gone in 2026. Swapping AiSensy for a
+different BSP removes the BSP's cut, not Meta's.
+
+So the free channel is **Telegram**, which has no per-message cost and now
+sits behind the same `MessagingConnector` as AiSensy. That interface was
+written before there was a second implementation to justify it, and
+`test_the_whole_call_flow_works_on_telegram` is it being cashed rather than
+asserted: the call flow cannot tell the channel changed.
+
+The swap is not free of consequence. **Telegram addresses a `chat_id`, not a
+phone number**, and a `chat_id` only exists once the patient has messaged the
+bot. A clinic switching to Telegram must get every patient to press Start
+before it can confirm anything, and a patient who has not is unreachable —
+modelled as an explicit non-retryable failure naming the number, because a
+send that quietly goes nowhere is the messaging-layer version of the silent
+error this project exists to prevent.
+
+Set `MESSAGING_PROVIDER=telegram` and `TELEGRAM_BOT_TOKEN`. The full free
+voice path — LiveKit, Silero VAD, IndicConformer, IndicF5 — is planned in
+[docs/free-voice-stack.md](docs/free-voice-stack.md), including the latency
+budget that makes it unworkable on CPU.
 
 ---
 

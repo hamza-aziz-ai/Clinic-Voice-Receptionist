@@ -41,11 +41,28 @@ calendar = Calendar(hours=ClinicHours(), chairs=2)
 # The mock builds the same AiSensy request body the live connector posts, so
 # a parameter-order or missing-campaign mistake fails here and in the demo,
 # not only against a real account nobody running this repository has.
-messaging = (
-    AiSensyConnector(settings.aisensy_api_key, settings.aisensy_base_url)
-    if settings.aisensy_api_key
-    else MockAiSensy()
-)
+def _build_messaging():
+    """Pick the outbound channel.
+
+    Explicit provider first, then whichever credential is present, then the
+    mock. Telegram is free of charge where WhatsApp bills per message, but it
+    can only reach patients who have started a chat with the bot - so the
+    choice is a product decision, not a cost optimisation.
+    """
+    provider = settings.messaging_provider
+    if provider == "telegram" or (not provider and settings.telegram_bot_token):
+        from ..messaging.telegram import MockTelegram, TelegramConnector
+
+        if settings.telegram_bot_token:
+            return TelegramConnector(settings.telegram_bot_token)
+        return MockTelegram()
+    if provider == "aisensy" or (not provider and settings.aisensy_api_key):
+        if settings.aisensy_api_key:
+            return AiSensyConnector(settings.aisensy_api_key, settings.aisensy_base_url)
+    return MockAiSensy()
+
+
+messaging = _build_messaging()
 def _crosscheck_hook():
     """The LLM second opinion, or None when it is switched off.
 
