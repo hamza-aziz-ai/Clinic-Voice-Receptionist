@@ -106,6 +106,11 @@ class CallSession:
     # the same question five times about text that is not changing.
     crosscheck_cache: Any = None
     crosscheck_cached: bool = False
+    # Anything the recogniser wanted flagged about the audio itself - 8 kHz
+    # telephony against models benchmarked at 16 kHz, above all. Surfaced
+    # rather than swallowed, because it is the gap between a published error
+    # rate and the one a clinic actually gets.
+    transcript_notes: list[str] = field(default_factory=list)
 
     def say(self, text: str, note: str = "") -> str:
         self.transcript.append(Turn("agent", text, self.state, note))

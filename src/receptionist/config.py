@@ -63,6 +63,20 @@ class Settings:
         default_factory=lambda: os.environ.get("LLM_BASE_URL", "http://localhost:11434")
     )
 
+    # Re-transcribe the Bolna recording for per-word confidence. Off by
+    # default: it needs a model checkpoint on disk, and a deployment without
+    # one must keep working rather than fail to answer the phone.
+    asr_enabled: bool = field(
+        default_factory=lambda: os.environ.get(
+            "ASR_ENABLED", ""
+        ).strip().lower() in ("1", "true", "yes")
+    )
+    asr_model: str = field(
+        default_factory=lambda: os.environ.get(
+            "ASR_MODEL", "ai4bharat/indic-conformer-600m-multilingual"
+        )
+    )
+
     clinic_name: str = field(
         default_factory=lambda: os.environ.get("CLINIC_NAME", "Al Noor Dental")
     )

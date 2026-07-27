@@ -67,6 +67,7 @@ def ingest_execution(
     execution: BolnaExecution,
     handler: CallHandler,
     now: datetime | None = None,
+    transcriber: Any = None,
 ) -> IngestResult:
     """Replay a completed execution through the booking gate.
 
@@ -103,13 +104,17 @@ def ingest_execution(
     session.idempotency_key = execution.idempotency_key()
     _precompute_crosscheck(session, handler, caller_turns, now)
 
+    # Bolna's transcript is a plain string with no confidence data, so without
+    # this the slot layer falls back to its no-metadata default on every word.
+    # Re-transcribing the recording is what supplies the signal the confidence
+    # model was built around. None means we genuinely do not know how well each
+    # word was heard, which is the honest value and not a failure.
+    word_confidences = _transcribe_caller(execution, transcriber, session)
+
     for turn in caller_turns:
         if session.state in ("ended", "escalated"):
             break
-        # No word confidences: Bolna's transcript is a plain string. The slot
-        # layer falls back to its no-metadata default, which is the honest
-        # value - we genuinely do not know how well each word was heard.
-        handler.handle_utterance(session, turn, now, word_confidences=None)
+        handler.handle_utterance(session, turn, now, word_confidences=word_confidences)
 
     if session.state == "escalated":
         return IngestResult(
@@ -130,6 +135,45 @@ def ingest_execution(
         _callback_reason(session, execution),
         session=session, unresolved=unresolved,
     )
+
+
+def _transcribe_caller(
+    execution: BolnaExecution,
+    transcriber: Any,
+    session: CallSession,
+) -> dict[str, float] | None:
+    """Re-transcribe the call recording for per-word confidence.
+
+    Only the caller's channel. The recording contains both parties, and the
+    agent says the name and the number aloud during read-backs - clearly,
+    at high confidence. Letting that supply confidence for the caller's slots
+    would mean the gate scoring the agent's pronunciation of a value against
+    the value itself, which is circular and defeats it on exactly the fields
+    it protects. The AudioRef carries the channel and the transcriber refuses
+    a mixed recording outright.
+
+    Any failure returns None, which is the behaviour that existed before this
+    was wired in: fewer confident slots, more read-backs, more callbacks.
+    Degraded, never wrong.
+    """
+    if transcriber is None or not execution.recording_url:
+        return None
+
+    from ..asr.base import AudioRef
+
+    try:
+        transcript = transcriber.transcribe(
+            AudioRef(uri=execution.recording_url),
+            language_hint=session.language if session.language != "uncertain" else None,
+        )
+    except Exception:
+        return None
+
+    if transcript is None:
+        return None
+
+    session.transcript_notes = list(transcript.notes)
+    return transcript.word_confidences() or None
 
 
 def _precompute_crosscheck(

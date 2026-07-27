@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 202 passed
+$ python -m pytest -q          # 219 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -247,6 +247,57 @@ language model is unreachable is worse than one that never had a language model.
 
 ---
 
+## Choosing an ASR model on failure mode, not error rate
+
+Whisper has the best multilingual WER available. It is still the wrong model
+to put at the *source* of this system, and the reason is the whole thesis of
+the project.
+
+Whisper is sequence-to-sequence, so its confidence is a decoder
+log-probability. Its documented failure on silence or noise is to emit
+**fluent, coherent, fabricated text at high confidence** — high `avg_logprob`,
+low `no_speech_prob`, straight past its own internal filter. That is exactly
+the failure this repository exists to prevent, relocated one layer upstream
+where the read-back gate cannot see it. Every silent error the confidence
+model catches would be reintroduced by the thing feeding it.
+
+A CTC model fails toward blanks and low posteriors: worse on paper, catchable
+in practice. For a system whose entire claim is *"it knows when it is unsure"*,
+a loud failure mode beats a lower error rate.
+
+So the intended recogniser is **AI4Bharat's IndicConformer** — hybrid
+CTC-RNNT, all 22 scheduled Indian languages, MIT licensed, fine-tunable in
+NeMo. The CTC branch gives frame-level posteriors, which is genuine per-word
+confidence computed from acoustics rather than a decoder's opinion of its own
+output. **IndicWhisper** (lowest WER on 39 of 59 Indic benchmarks) belongs
+behind `nlu.crosscheck` as a second opinion that can only *lower* confidence —
+never as the transcript a booking derives from.
+
+Two things the interface refuses outright:
+
+- **Mixed recordings.** A call recording contains both parties, and the agent
+  says the name and the number aloud during read-backs — clearly, at high
+  confidence. Letting that supply confidence for the caller's slots means
+  scoring the agent's pronunciation of a value against the value itself. The
+  channel is required; a mono recording returns nothing.
+- **Invented confidence.** If the decoder exposes no per-word score, the
+  adapter returns none rather than a plausible number. A fabricated confidence
+  is worse than a missing one, because the gate treats it as evidence.
+
+Bolna's webhook already carries `recording_url`, so this runs post-call: the
+telephony stays Bolna's, and the confidence signal the slot layer was built
+around finally gets connected. Off by default (`ASR_ENABLED=1`), and any
+failure degrades to no confidences — more read-backs, more callbacks, never a
+wrong booking.
+
+**The gap nobody benchmarks:** every published number for these models is
+16 kHz wideband. A phone call is 8 kHz μ-law with packet loss. Narrowband
+audio is flagged rather than silently resampled, because that gap is most of
+the difference between a benchmark result and what a clinic actually gets —
+and it hurts digits worst, which is the one slot nothing downstream can check.
+
+---
+
 ## Reading the vendor docs changed the design
 
 I assumed Bolna's webhook delivered a transcript with per-word ASR
@@ -410,11 +461,11 @@ the real request body, so an ordering mistake fails offline.
   accounts, and pretending otherwise would make the tests meaningless. The
   n8n workflow is generated and valid for import, but has not been run against
   a live Bolna agent.
-- **No ASR or TTS.** The system consumes transcripts. The evaluation harness
-  feeds it word confidences to simulate degradation; the Bolna path has none,
-  because Bolna does not send any — that difference is the design constraint
-  described above, not an oversight. Degradation is simulated, never measured
-  on real audio.
+- **No ASR model is actually loaded, and no TTS at all.** The recogniser sits
+  behind an interface with a mock, like Bolna and AiSensy. `IndicConformer`
+  has an adapter written against NeMo's API but has never been run here — no
+  checkpoint, no GPU, no real audio. The model choice above is reasoned from
+  published failure modes, not measured. Degradation is still simulated.
 - **The Bolna agent prompt is not here.** Making the read-backs happen during
   the call is a prompt-engineering job on Bolna's side. This repository assumes
   they happened and verifies it from the transcript; it cannot make them happen.

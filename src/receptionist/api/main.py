@@ -69,6 +69,21 @@ def _crosscheck_hook():
     return hook
 
 
+def _build_transcriber():
+    """The recogniser, or None when re-transcription is switched off.
+
+    Constructed lazily inside the adapter, so a missing checkpoint costs the
+    confidence signal rather than the ability to answer the phone.
+    """
+    if not settings.asr_enabled:
+        return None
+    from ..asr.indic_conformer import IndicConformerTranscriber
+
+    return IndicConformerTranscriber(settings.asr_model)
+
+
+TRANSCRIBER = _build_transcriber()
+
 handler = CallHandler(
     calendar, messaging,
     clinic_name=settings.clinic_name, review_link=settings.review_link,
@@ -212,7 +227,7 @@ async def bolna_webhook(
     except ValueError as exc:                       # malformed JSON body
         raise HTTPException(400, f"unreadable payload: {exc}") from exc
 
-    result = ingest_execution(execution, handler)
+    result = ingest_execution(execution, handler, transcriber=TRANSCRIBER)
     if result.session is not None:
         SESSIONS[result.session.call_id] = result.session
     return result.to_dict()
