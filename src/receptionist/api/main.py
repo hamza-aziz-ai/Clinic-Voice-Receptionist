@@ -5,7 +5,7 @@ scheduling or evaluation layers; nothing is derived in the browser.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +87,28 @@ class Utterance(BaseModel):
     now: datetime | None = None
 
 
+def _naive_clinic_local(when: datetime | None) -> datetime | None:
+    """Strip the timezone off an incoming timestamp, converting to clinic time.
+
+    Everything below this layer works in naive clinic wall time, so an aware
+    datetime reaching the extractor raises "can't compare offset-naive and
+    offset-aware datetimes" and the request 500s.
+
+    That is not hypothetical: the console posts ``new Date().toISOString()``,
+    which is UTC with a trailing Z, so its main "Send to agent" button failed
+    on every click in a real browser. The tests missed it because they post a
+    naive string. Converting rather than merely discarding the offset matters
+    too - a 21:00 Dubai call is 17:00Z, and dropping the Z alone would resolve
+    "tomorrow" against the wrong day for anyone calling after 20:00.
+    """
+    if when is None or when.tzinfo is None:
+        return when
+    return (
+        when.astimezone(timezone.utc).replace(tzinfo=None)
+        + timedelta(hours=settings.clinic_utc_offset_hours)
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -111,7 +133,9 @@ def utterance(call_id: str, req: Utterance) -> dict[str, Any]:
     if session is None:
         raise HTTPException(404, f"No call {call_id!r}")
     reply = handler.handle_utterance(
-        session, req.text, req.now or datetime.now(), req.word_confidences
+        session, req.text,
+        _naive_clinic_local(req.now) or datetime.now(),
+        req.word_confidences,
     )
     return {"reply": reply, **session.to_dict()}
 

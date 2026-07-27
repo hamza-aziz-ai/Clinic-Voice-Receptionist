@@ -183,3 +183,30 @@ def test_console_html_has_accessibility_landmarks():
     for marker in ('lang="en"', "skip-link", 'role="status"', 'aria-live="polite"',
                    "<main", 'scope="col"', "<caption"):
         assert marker in html, f"missing {marker}"
+
+
+def test_utterance_accepts_an_aware_timestamp_from_the_browser():
+    """The console posts new Date().toISOString() - UTC with a trailing Z.
+    That reached the extractor as an aware datetime and raised "can't compare
+    offset-naive and offset-aware datetimes", so the main Send to agent button
+    500'd on every click in a real browser. The suite missed it because these
+    tests posted a naive string."""
+    s = client.post("/calls", json={"caller_number": "+971501112222"}).json()
+    r = client.post(f"/calls/{s['call_id']}/utterance", json={
+        "text": "my name is Priya Menon I need a cleaning",
+        "now": "2026-07-27T06:00:00Z"})
+    assert r.status_code == 200, r.text
+    assert any(x["name"] == "procedure" and x["value"] == "cleaning"
+               for x in r.json()["slots"])
+
+
+def test_aware_timestamp_is_converted_not_merely_stripped():
+    """17:00Z is 21:00 in Dubai. Dropping the offset instead of converting
+    resolves "tomorrow" against the wrong day for any evening caller."""
+    s = client.post("/calls", json={}).json()
+    body = client.post(f"/calls/{s['call_id']}/utterance", json={
+        "text": "my name is Priya Menon a cleaning tomorrow at 3 pm",
+        "now": "2026-07-27T17:00:00Z"}).json()
+    slot = next(x for x in body["slots"] if x["name"] == "appointment_time")
+    # 27 July 21:00 clinic-local, so "tomorrow" is the 28th.
+    assert slot["value"].startswith("2026-07-28T15:00")

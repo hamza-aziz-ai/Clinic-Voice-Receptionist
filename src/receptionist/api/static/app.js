@@ -60,11 +60,21 @@ function renderSlots(session) {
     else if (s.needs_confirmation) { status = "Read-back required";  cls = "status-warn"; }
     else                           { status = "Accepted";            cls = "status-ok"; }
     const pct = Math.round(s.confidence * 100);
+    // The bar is decoration over a number that is already there, so it is
+    // hidden from assistive tech rather than duplicated as an ARIA meter.
+    // Tinting it when the slot is below threshold makes the confidence and
+    // status columns agree at a glance instead of needing to be cross-read.
+    const below = s.needs_confirmation ? " below" : "";
     return `<tr>
       <th scope="row">${esc(s.name.replace(/_/g, " "))}</th>
-      <td>${esc(s.value ?? "—")}${s.notes.length ? `<span class="note"> ${esc(s.notes.join("; "))}</span>` : ""}</td>
-      <td><span class="bar" style="width:${Math.max(pct * 0.6, 2)}px" aria-hidden="true"></span>${pct}%</td>
-      <td class="${cls}">${status}</td>
+      <td>${esc(s.value ?? "—")}${s.notes.length ? `<span class="note">${esc(s.notes.join("; "))}</span>` : ""}</td>
+      <td class="num">
+        <span class="meter">
+          <span class="meter-track" aria-hidden="true"><span class="meter-fill${below}" style="width:${pct}%"></span></span>
+          <span>${pct}%</span>
+        </span>
+      </td>
+      <td><span class="pill ${cls}">${status}</span></td>
     </tr>`;
   }).join("");
 }
@@ -75,9 +85,9 @@ async function refreshBookings() {
       <th scope="row">${esc(new Date(b.start).toLocaleString())}</th>
       <td>${esc(b.patient_name)}</td>
       <td>${esc(b.procedure.replace(/_/g, " "))}</td>
-      <td>${b.duration_min} min</td>
+      <td class="num">${b.duration_min} min</td>
       <td>${esc(b.language_name)}</td>
-      <td>${esc(b.phone)}</td></tr>`).join("")
+      <td class="num">${esc(b.phone)}</td></tr>`).join("")
     : '<tr><td colspan="6" class="empty">No bookings yet.</td></tr>';
 }
 
@@ -87,8 +97,8 @@ async function refreshMessages() {
       <th scope="row">${esc(m.template.replace(/_/g, " "))}</th>
       <td>${esc(m.to)}</td>
       <td>${esc(m.language_name)}</td>
-      <td>${m.send_after ? esc(new Date(m.send_after).toLocaleString()) : "immediately"}</td>
-      <td class="${statusClass(m.status)}">${esc(m.status)}</td>
+      <td class="num">${m.send_after ? esc(new Date(m.send_after).toLocaleString()) : "immediately"}</td>
+      <td><span class="pill ${statusClass(m.status)}">${esc(m.status)}</span></td>
       <td lang="${esc(m.language)}">${esc(m.body)}</td></tr>`).join("")
     : '<tr><td colspan="6" class="empty">No messages queued.</td></tr>';
 }
@@ -117,11 +127,11 @@ async function refreshEval() {
   $("eval").innerHTML = data.rows.map((r) => {
     const silent = r.wrong_silent;
     return `<tr>
-      <th scope="row">${Math.round(r.asr_error_rate * 100)}%</th>
-      <td>${(r.slot_accuracy * 100).toFixed(1)}%</td>
-      <td>${(r.language_accuracy * 100).toFixed(1)}%</td>
-      <td>${r.wrong_caught}</td>
-      <td class="${silent === 0 ? "status-ok" : "status-error"}">${silent === 0 ? "0 — none" : silent}</td>
+      <th scope="row" class="num">${Math.round(r.asr_error_rate * 100)}%</th>
+      <td class="num">${(r.slot_accuracy * 100).toFixed(1)}%</td>
+      <td class="num">${(r.language_accuracy * 100).toFixed(1)}%</td>
+      <td class="num">${r.wrong_caught}</td>
+      <td><span class="pill ${silent === 0 ? "status-ok" : "status-error"}">${silent === 0 ? "0 — none" : silent}</span></td>
     </tr>`;
   }).join("");
 }

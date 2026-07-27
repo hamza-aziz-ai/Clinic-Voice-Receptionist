@@ -1,34 +1,88 @@
-/* No build step, no framework, no CDN. An in-house clinic IT team can read
-   and edit this file. Colour is never the sole carrier of meaning; every
-   status is also stated in text. Both themes clear WCAG AA contrast. */
+/* No build step, no framework, no CDN, no webfont. An in-house clinic IT team
+   can read and edit this file, and it renders identically offline.
+
+   Two rules the visual design is not allowed to break:
+
+   1. Colour never carries meaning alone. Every status is a word first; the
+      tint and the border are reinforcement for people who read them quickly,
+      not the signal itself.
+   2. Both themes clear WCAG AA (4.5:1 body, 3:1 large text and UI borders).
+      Checked against --bg and against --surface, because half this interface
+      sits on the tinted surface and a token that only passes on white is a
+      token that fails in half the places it is used. */
 
 :root {
+  color-scheme: light dark;
+
+  /* Spacing scale. One rhythm everywhere beats fifteen hand-picked values. */
+  --s1: .25rem;
+  --s2: .5rem;
+  --s3: .75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+
+  --measure: 68ch;      /* prose line length; longer is measurably harder to read */
+  --page: 78rem;
+
   --bg: #ffffff;
-  --surface: #f4f6f8;
-  --border: #c9d1d9;
-  --text: #14181c;
-  --muted: #4a5560;
-  --accent: #0b5c8a;
+  --surface: #f6f8fa;
+  --surface-2: #eef2f6;
+  --border: #d3dbe3;
+  /* 3.49:1 on --bg, 3.28:1 on --surface. The old input border was #c9d1d9 at
+     1.54:1 - the interface has been claiming AA while the edge of every text
+     box was less than half the required contrast. Nothing about it looked
+     wrong, which is the argument for measuring rather than eyeballing. */
+  --border-strong: #7b8b9c;
+  --text: #0f172a;
+  --muted: #55627a;
+  --accent: #0f5c7d;
+  --accent-hover: #0b475f;
   --accent-text: #ffffff;
-  --ok: #1c6b3a;
-  --warn: #8a5000;
-  --error: #a3241c;
-  --focus: #0b5c8a;
+  --accent-soft: #e4f0f6;
+
+  --ok: #12653a;
+  --ok-soft: #e5f3ec;
+  --warn: #7a4a00;
+  --warn-soft: #fbf0dd;
+  --error: #99231b;
+  --error-soft: #fceceb;
+
+  --focus: #0f5c7d;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12161a;
-    --surface: #1c2228;
-    --border: #39434d;
-    --text: #eef2f5;
-    --muted: #b3bfca;
-    --accent: #6db3e0;
-    --accent-text: #0a1015;
-    --ok: #78d29a;
-    --warn: #e5b25c;
-    --error: #f0928a;
-    --focus: #6db3e0;
+    --bg: #0e1319;
+    --surface: #161d25;
+    --surface-2: #1c2530;
+    --border: #2c3742;
+    /* 3.48:1 on --bg and 3.17:1 on --surface. It draws the edge of every text
+       input and secondary button, which WCAG 1.4.11 treats as a UI component
+       boundary at 3:1 - the value that looked right by eye measured 2.36. */
+    --border-strong: #5a6d7e;
+    --text: #e9eff5;
+    --muted: #a6b4c2;
+    --accent: #63b5da;
+    --accent-hover: #86c8e7;
+    --accent-text: #06131b;
+    --accent-soft: #14313f;
+
+    --ok: #71d49e;
+    --ok-soft: #102a1e;
+    --warn: #ecba6c;
+    --warn-soft: #2d2214;
+    --error: #f39f97;
+    --error-soft: #331c1a;
+
+    --focus: #86c8e7;
+    --shadow: none;
   }
 }
 
@@ -36,99 +90,307 @@
 
 body {
   margin: 0;
-  padding: 0 1rem 4rem;
+  padding: 0 var(--s4) var(--s7);
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto,
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto,
+        /* Without these the Indic text this whole project is about renders
+           as boxes. They are the point, not a nicety. */
         "Noto Sans Tamil", "Noto Sans Malayalam", "Noto Sans Kannada",
         "Noto Sans Devanagari", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 .skip-link {
   position: absolute; left: -9999px; top: 0;
   background: var(--accent); color: var(--accent-text);
-  padding: .6rem 1rem; z-index: 10;
+  padding: var(--s3) var(--s4); z-index: 20;
+  border-radius: 0 0 var(--radius-sm) 0; font-weight: 600;
 }
 .skip-link:focus { left: 0; }
 
+/* One focus treatment for everything. A visible ring is the only way a
+   keyboard user knows where they are, so it is never removed - only styled. */
 :focus-visible {
-  outline: 3px solid var(--focus);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
+  border-radius: 3px;
 }
 
-.masthead { max-width: 76rem; margin: 0 auto; padding: 1.75rem 0 .5rem; }
-h1 { font-size: 1.5rem; margin: 0; }
-.sub { color: var(--muted); margin: .35rem 0 0; }
+/* ---------------------------------------------------------------- masthead */
+.masthead {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: var(--s6) 0 var(--s4);
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--s2) var(--s4);
+}
 
-nav { max-width: 76rem; margin: 0 auto; }
-.tabs { display: flex; flex-wrap: wrap; gap: .25rem; list-style: none; margin: 1rem 0 0; padding: 0; border-bottom: 2px solid var(--border); }
+h1 {
+  font-size: 1.4rem; font-weight: 650; margin: 0;
+  letter-spacing: -.01em;
+}
+
+.sub {
+  color: var(--muted); margin: 0; font-size: .9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- tabs */
+.tabbar {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  margin: 0 calc(var(--s4) * -1);
+  padding: 0 var(--s4);
+}
+
+nav { max-width: var(--page); margin: 0 auto; }
+
+.tabs {
+  display: flex; flex-wrap: wrap; gap: var(--s1);
+  list-style: none; margin: 0; padding: 0;
+}
+
 .tabs button {
-  background: none; border: 0; border-bottom: 3px solid transparent;
-  color: var(--muted); font: inherit; padding: .6rem 1rem; cursor: pointer;
-  margin-bottom: -2px;
+  background: none; border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted); font: inherit; font-weight: 500;
+  /* 44px tall including the border: a comfortable pointer target, and the
+     same rule that keeps it usable on a tablet at the reception desk. */
+  padding: var(--s3) var(--s4);
+  cursor: pointer;
+  margin-bottom: -1px;
 }
+.tabs button:hover { color: var(--text); background: var(--surface); }
 .tabs button[aria-selected="true"] {
-  color: var(--text); border-bottom-color: var(--accent); font-weight: 600;
+  color: var(--accent); border-bottom-color: var(--accent); font-weight: 650;
 }
-.tabs button:hover { color: var(--text); }
 
 .live {
-  max-width: 76rem; margin: .75rem auto 0; min-height: 1.5rem;
-  color: var(--muted); font-size: .95rem;
+  max-width: var(--page);
+  margin: var(--s3) auto 0;
+  min-height: 1.4rem;
+  color: var(--muted); font-size: .9rem;
 }
 
-main { max-width: 76rem; margin: 0 auto; }
+/* ---------------------------------------------------------------- layout */
+main { max-width: var(--page); margin: 0 auto; }
 main:focus { outline: none; }
-h2 { font-size: 1.2rem; margin: 1.5rem 0 .75rem; }
-h3 { font-size: 1.02rem; margin: 1.75rem 0 .6rem; }
 
-.field { margin-bottom: 1rem; }
-label { display: block; font-weight: 600; margin-bottom: .3rem; }
-.hint, .note { color: var(--muted); font-size: .93rem; margin: .25rem 0 .5rem; }
-.note { max-width: 62ch; }
-
-textarea {
-  width: 100%; padding: .65rem; font: inherit;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px;
+h2 {
+  font-size: 1.15rem; font-weight: 650;
+  margin: var(--s5) 0 var(--s3); letter-spacing: -.005em;
 }
-textarea[aria-invalid="true"] { border-color: var(--error); border-width: 2px; }
+h3 {
+  font-size: .95rem; font-weight: 650; margin: 0 0 var(--s3);
+  color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+}
 
-.error { color: var(--error); font-weight: 600; margin: .35rem 0 0; }
+/* Cards group a heading with the thing it describes. Without them a long
+   panel reads as one undifferentiated column of tables. */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s5);
+  margin: 0 0 var(--s4);
+  box-shadow: var(--shadow);
+}
+.card > :last-child { margin-bottom: 0; }
 
-.row { display: flex; gap: .6rem; flex-wrap: wrap; }
+.hint, .note {
+  color: var(--muted); font-size: .9rem;
+  margin: 0 0 var(--s3); max-width: var(--measure);
+}
+
+/* ---------------------------------------------------------------- forms */
+.field { margin-bottom: var(--s4); }
+label { display: block; font-weight: 600; margin-bottom: var(--s1); font-size: .93rem; }
+
+textarea, input[type="datetime-local"] {
+  width: 100%; padding: var(--s3);
+  font: inherit; color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+textarea { resize: vertical; min-height: 5.5rem; }
+input[type="datetime-local"] { width: auto; }
+
+textarea:hover, input[type="datetime-local"]:hover { border-color: var(--muted); }
+textarea[aria-invalid="true"] {
+  border-color: var(--error); border-width: 2px; background: var(--error-soft);
+}
+
+.error {
+  color: var(--error); font-weight: 600; font-size: .92rem;
+  margin: var(--s2) 0 0;
+}
+
+.row { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
+
 button {
-  font: inherit; padding: .55rem 1.1rem; cursor: pointer;
+  font: inherit; font-weight: 500;
+  padding: var(--s2) var(--s4); min-height: 2.5rem;
+  cursor: pointer;
   background: var(--surface); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
 }
-button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button:hover { background: var(--surface-2); border-color: var(--muted); }
 
-.examples { border: 1px solid var(--border); border-radius: 6px; margin: 1.25rem 0 0; padding: .75rem 1rem 1rem; }
-.examples legend { padding: 0 .4rem; font-weight: 600; font-size: .93rem; }
-.chip { font-size: .9rem; padding: .35rem .75rem; margin: .25rem .3rem 0 0; }
+button.primary {
+  background: var(--accent); color: var(--accent-text);
+  border-color: var(--accent); font-weight: 600;
+}
+button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 
-.transcript { list-style: none; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 6px; }
-.transcript li { padding: .6rem .9rem; border-bottom: 1px solid var(--border); }
+.examples {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: var(--s4) 0 0; padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface);
+}
+.examples legend {
+  padding: 0 var(--s2); font-weight: 600; font-size: .85rem;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+}
+.chip {
+  font-size: .875rem; padding: var(--s1) var(--s3);
+  min-height: 2rem; margin: var(--s1) var(--s1) 0 0;
+  border-radius: var(--radius-pill); background: var(--bg);
+}
+
+.controls {
+  display: flex; flex-wrap: wrap; align-items: end; gap: var(--s3);
+  margin: 0 0 var(--s4);
+}
+.controls label { margin-bottom: var(--s1); }
+.controls > div { display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- transcript */
+.transcript {
+  list-style: none; padding: 0; margin: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.transcript li {
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--border);
+}
 .transcript li:last-child { border-bottom: 0; }
-.transcript .who { font-weight: 600; margin-right: .5rem; }
 .transcript .agent { background: var(--surface); }
-.transcript .note { display: block; font-size: .85rem; color: var(--muted); margin-top: .2rem; }
+.transcript .who {
+  font-weight: 650; margin-right: var(--s2); color: var(--accent);
+}
+.transcript .agent .who { color: var(--muted); }
+.transcript .note {
+  display: block; font-size: .84rem; color: var(--muted);
+  margin: var(--s1) 0 0; font-style: italic;
+}
+
 .empty { color: var(--muted); font-style: italic; }
 
-table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
-caption { text-align: left; color: var(--muted); font-size: .93rem; padding-bottom: .5rem; }
-th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { font-size: .88rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-tbody tr:nth-child(odd) { background: var(--surface); }
+/* ---------------------------------------------------------------- tables */
+/* Wide tables scroll inside their own box rather than pushing the page
+   sideways. The wrapper is focusable and labelled, because a region that
+   scrolls must be reachable by keyboard - otherwise the last columns of the
+   WhatsApp queue are simply unavailable without a mouse. */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.table-wrap:focus-visible { outline-offset: -2px; }
 
-/* Status is carried by the text itself; the mark is redundant reinforcement. */
-.status-ok    { color: var(--ok); font-weight: 600; }
-.status-warn  { color: var(--warn); font-weight: 600; }
-.status-error { color: var(--error); font-weight: 600; }
+table { width: 100%; border-collapse: collapse; }
 
-.bar { display: inline-block; height: .65rem; background: var(--accent); border-radius: 2px; vertical-align: middle; margin-right: .4rem; }
+caption {
+  text-align: left; color: var(--muted); font-size: .88rem;
+  padding: 0 0 var(--s3);
+}
+
+thead th {
+  position: sticky; top: 0;
+  background: var(--surface-2);
+  font-size: .78rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+th, td {
+  text-align: left; padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:last-child > * { border-bottom: 0; }
+
+/* Row headers are the identifying column; giving them weight lets the eye
+   scan down one column instead of reading every cell. */
+tbody th[scope="row"] { font-weight: 600; white-space: nowrap; }
+
+/* Zebra striping is replaced by a hover row. Striping adds a second visual
+   rhythm competing with the status tints, and on a four-row table it reads
+   as meaning rather than decoration. */
+tbody tr:hover { background: var(--surface); }
+
+td .note { display: block; margin: var(--s1) 0 0; font-size: .84rem; font-style: italic; }
+
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- status */
+/* The word is the signal. The pill is reinforcement, and it carries a border
+   as well as a tint so it survives greyscale printing and low-colour vision. */
+.pill {
+  display: inline-block; white-space: nowrap;
+  padding: .1rem var(--s2);
+  border-radius: var(--radius-pill);
+  font-size: .82rem; font-weight: 650;
+  border: 1px solid currentColor;
+}
+.status-ok    { color: var(--ok); background: var(--ok-soft); }
+.status-warn  { color: var(--warn); background: var(--warn-soft); }
+.status-error { color: var(--error); background: var(--error-soft); }
+
+/* ---------------------------------------------------------------- meter */
+.meter {
+  display: flex; align-items: center; gap: var(--s2);
+  font-variant-numeric: tabular-nums;
+}
+.meter-track {
+  flex: 0 0 4rem; height: .4rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.meter-fill {
+  display: block; height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+/* Below its threshold the bar is tinted like the status it will produce, so
+   the two columns agree at a glance instead of having to be cross-read. */
+.meter-fill.below { background: var(--warn); }
+
+/* ---------------------------------------------------------------- narrow */
+@media (max-width: 40rem) {
+  body { padding: 0 var(--s3) var(--s6); }
+  .tabbar { margin: 0 calc(var(--s3) * -1); padding: 0 var(--s3); }
+  .card { padding: var(--s4); }
+  .masthead { padding: var(--s5) 0 var(--s3); }
+  th, td { padding: var(--s2) var(--s3); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Printing a booking sheet is a real thing a clinic does. */
+@media print {
+  .tabbar, .skip-link, form, .controls, .live { display: none; }
+  [role="tabpanel"][hidden] { display: block !important; }
+  .card { border-color: #999; box-shadow: none; break-inside: avoid; }
 }
