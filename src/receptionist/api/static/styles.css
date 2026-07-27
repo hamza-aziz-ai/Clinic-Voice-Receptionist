@@ -1,0 +1,134 @@
+/* No build step, no framework, no CDN. An in-house clinic IT team can read
+   and edit this file. Colour is never the sole carrier of meaning; every
+   status is also stated in text. Both themes clear WCAG AA contrast. */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f4f6f8;
+  --border: #c9d1d9;
+  --text: #14181c;
+  --muted: #4a5560;
+  --accent: #0b5c8a;
+  --accent-text: #ffffff;
+  --ok: #1c6b3a;
+  --warn: #8a5000;
+  --error: #a3241c;
+  --focus: #0b5c8a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161a;
+    --surface: #1c2228;
+    --border: #39434d;
+    --text: #eef2f5;
+    --muted: #b3bfca;
+    --accent: #6db3e0;
+    --accent-text: #0a1015;
+    --ok: #78d29a;
+    --warn: #e5b25c;
+    --error: #f0928a;
+    --focus: #6db3e0;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 1rem 4rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto,
+        "Noto Sans Tamil", "Noto Sans Malayalam", "Noto Sans Kannada",
+        "Noto Sans Devanagari", sans-serif;
+}
+
+.skip-link {
+  position: absolute; left: -9999px; top: 0;
+  background: var(--accent); color: var(--accent-text);
+  padding: .6rem 1rem; z-index: 10;
+}
+.skip-link:focus { left: 0; }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.masthead { max-width: 76rem; margin: 0 auto; padding: 1.75rem 0 .5rem; }
+h1 { font-size: 1.5rem; margin: 0; }
+.sub { color: var(--muted); margin: .35rem 0 0; }
+
+nav { max-width: 76rem; margin: 0 auto; }
+.tabs { display: flex; flex-wrap: wrap; gap: .25rem; list-style: none; margin: 1rem 0 0; padding: 0; border-bottom: 2px solid var(--border); }
+.tabs button {
+  background: none; border: 0; border-bottom: 3px solid transparent;
+  color: var(--muted); font: inherit; padding: .6rem 1rem; cursor: pointer;
+  margin-bottom: -2px;
+}
+.tabs button[aria-selected="true"] {
+  color: var(--text); border-bottom-color: var(--accent); font-weight: 600;
+}
+.tabs button:hover { color: var(--text); }
+
+.live {
+  max-width: 76rem; margin: .75rem auto 0; min-height: 1.5rem;
+  color: var(--muted); font-size: .95rem;
+}
+
+main { max-width: 76rem; margin: 0 auto; }
+main:focus { outline: none; }
+h2 { font-size: 1.2rem; margin: 1.5rem 0 .75rem; }
+h3 { font-size: 1.02rem; margin: 1.75rem 0 .6rem; }
+
+.field { margin-bottom: 1rem; }
+label { display: block; font-weight: 600; margin-bottom: .3rem; }
+.hint, .note { color: var(--muted); font-size: .93rem; margin: .25rem 0 .5rem; }
+.note { max-width: 62ch; }
+
+textarea {
+  width: 100%; padding: .65rem; font: inherit;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+textarea[aria-invalid="true"] { border-color: var(--error); border-width: 2px; }
+
+.error { color: var(--error); font-weight: 600; margin: .35rem 0 0; }
+
+.row { display: flex; gap: .6rem; flex-wrap: wrap; }
+button {
+  font: inherit; padding: .55rem 1.1rem; cursor: pointer;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+
+.examples { border: 1px solid var(--border); border-radius: 6px; margin: 1.25rem 0 0; padding: .75rem 1rem 1rem; }
+.examples legend { padding: 0 .4rem; font-weight: 600; font-size: .93rem; }
+.chip { font-size: .9rem; padding: .35rem .75rem; margin: .25rem .3rem 0 0; }
+
+.transcript { list-style: none; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 6px; }
+.transcript li { padding: .6rem .9rem; border-bottom: 1px solid var(--border); }
+.transcript li:last-child { border-bottom: 0; }
+.transcript .who { font-weight: 600; margin-right: .5rem; }
+.transcript .agent { background: var(--surface); }
+.transcript .note { display: block; font-size: .85rem; color: var(--muted); margin-top: .2rem; }
+.empty { color: var(--muted); font-style: italic; }
+
+table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+caption { text-align: left; color: var(--muted); font-size: .93rem; padding-bottom: .5rem; }
+th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: .88rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+tbody tr:nth-child(odd) { background: var(--surface); }
+
+/* Status is carried by the text itself; the mark is redundant reinforcement. */
+.status-ok    { color: var(--ok); font-weight: 600; }
+.status-warn  { color: var(--warn); font-weight: 600; }
+.status-error { color: var(--error); font-weight: 600; }
+
+.bar { display: inline-block; height: .65rem; background: var(--accent); border-radius: 2px; vertical-align: middle; margin-right: .4rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

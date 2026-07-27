@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinic Voice Receptionist — Console</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="masthead">
+  <h1>Clinic Voice Receptionist</h1>
+  <p class="sub" id="clinic-status">Loading status…</p>
+</header>
+
+<nav aria-label="Sections">
+  <ul class="tabs" role="tablist">
+    <li><button role="tab" aria-selected="true"  aria-controls="panel-calls"   id="tab-calls">Calls</button></li>
+    <li><button role="tab" aria-selected="false" aria-controls="panel-bookings" id="tab-bookings">Bookings</button></li>
+    <li><button role="tab" aria-selected="false" aria-controls="panel-messages" id="tab-messages">Messages</button></li>
+    <li><button role="tab" aria-selected="false" aria-controls="panel-eval"     id="tab-eval">Accuracy</button></li>
+  </ul>
+</nav>
+
+<p class="live" role="status" aria-live="polite" id="live-region"></p>
+
+<main id="main" tabindex="-1">
+
+  <section role="tabpanel" id="panel-calls" aria-labelledby="tab-calls">
+    <h2>Simulate an inbound call</h2>
+    <form id="call-form" novalidate>
+      <div class="field">
+        <label for="utterance">What the caller says</label>
+        <p class="hint" id="utterance-hint">
+          Type in English, Tamil, Kannada, Malayalam or Hindi. The agent detects
+          the language and asks you to confirm anything it is unsure of.
+        </p>
+        <textarea id="utterance" name="utterance" rows="3"
+                  aria-describedby="utterance-hint utterance-error" required></textarea>
+        <p class="error" id="utterance-error" hidden></p>
+      </div>
+      <div class="row">
+        <button type="submit" class="primary">Send to agent</button>
+        <button type="button" id="new-call">Start a new call</button>
+      </div>
+      <fieldset class="examples">
+        <legend>Example utterances</legend>
+        <button type="button" class="chip" data-fill="Hello my name is Priya Menon I need a cleaning tomorrow at 3 pm my number is nine seven one five zero one two three four five six seven">English · full booking</button>
+        <button type="button" class="chip" data-fill="നമസ്കാരം, my name is Anjali Nair, എനിക്ക് filling വേണം tomorrow at 4 pm, number zero five zero one two three four five six seven">Malayalam · code-switched</button>
+        <button type="button" class="chip" data-fill="வணக்கம், my name is Karthik Raman, எனக்கு cleaning வேண்டும் tomorrow morning">Tamil · vague time</button>
+      </fieldset>
+    </form>
+
+    <h3>Conversation</h3>
+    <ol class="transcript" id="transcript"><li class="empty">No call in progress.</li></ol>
+
+    <h3 id="slots-heading">Extracted details</h3>
+    <table aria-labelledby="slots-heading">
+      <caption>Confidence below each field's threshold triggers a spoken read-back before anything is booked.</caption>
+      <thead>
+        <tr><th scope="col">Field</th><th scope="col">Value</th>
+            <th scope="col">Confidence</th><th scope="col">Status</th></tr>
+      </thead>
+      <tbody id="slots"><tr><td colspan="4" class="empty">No details captured yet.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section role="tabpanel" id="panel-bookings" aria-labelledby="tab-bookings" hidden>
+    <h2>Bookings</h2>
+    <table aria-label="Confirmed appointments">
+      <thead>
+        <tr><th scope="col">When</th><th scope="col">Patient</th><th scope="col">Procedure</th>
+            <th scope="col">Duration</th><th scope="col">Language</th><th scope="col">Phone</th></tr>
+      </thead>
+      <tbody id="bookings"><tr><td colspan="6" class="empty">No bookings yet.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section role="tabpanel" id="panel-messages" aria-labelledby="tab-messages" hidden>
+    <h2>WhatsApp queue</h2>
+    <table aria-label="Outbound WhatsApp messages">
+      <thead>
+        <tr><th scope="col">Template</th><th scope="col">To</th><th scope="col">Language</th>
+            <th scope="col">Send after</th><th scope="col">Status</th><th scope="col">Body</th></tr>
+      </thead>
+      <tbody id="messages"><tr><td colspan="6" class="empty">No messages queued.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section role="tabpanel" id="panel-eval" aria-labelledby="tab-eval" hidden>
+    <h2>Extraction accuracy under ASR error</h2>
+    <p class="note">
+      Every test utterance is paired with the values it should produce, so accuracy
+      is measurable in languages the author does not speak. <strong>Silent errors</strong>
+      — a wrong value that was <em>not</em> flagged for read-back — are the only kind
+      that reach a patient.
+    </p>
+    <table aria-label="Accuracy by simulated ASR error rate">
+      <thead>
+        <tr><th scope="col">ASR error</th><th scope="col">Slot accuracy</th>
+            <th scope="col">Language accuracy</th><th scope="col">Caught by read-back</th>
+            <th scope="col">Silent errors</th></tr>
+      </thead>
+      <tbody id="eval"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>
