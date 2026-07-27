@@ -222,3 +222,53 @@ def test_the_non_commercial_licence_is_recorded():
     charges patients - a legal constraint that does not go away by ignoring it."""
     from receptionist.tts.mms_tts import LICENCE
     assert "non-commercial" in LICENCE.lower()
+
+
+# ------------------------------------------------- the agent speaks either way
+def test_a_typed_turn_is_also_spoken(voice_app):
+    """A receptionist that only answers aloud when you happen to use the
+    microphone is two different products wearing one interface."""
+    from fastapi.testclient import TestClient
+
+    main, _, speaker = voice_app
+    client = TestClient(main.app)
+    call = client.post("/calls", json={}).json()
+    body = client.post(f"/calls/{call['call_id']}/utterance",
+                       json={"text": "my name is Priya Menon I need a cleaning"}).json()
+
+    assert body["reply"]
+    assert base64.b64decode(body["audio"]) == b"RIFFfake"
+    assert speaker.spoken, "the reply was never synthesised"
+
+
+def test_a_typed_turn_is_silent_when_voice_is_off(monkeypatch):
+    from fastapi.testclient import TestClient
+    from receptionist.api.main import app
+    from receptionist.config import settings
+
+    monkeypatch.setattr(settings, "voice_enabled", False)
+    client = TestClient(app)
+    call = client.post("/calls", json={}).json()
+    body = client.post(f"/calls/{call['call_id']}/utterance",
+                       json={"text": "hello"}).json()
+    assert body["audio"] is None
+    assert body["reply"]
+
+
+def test_a_failing_speaker_never_costs_the_reply(voice_app, monkeypatch):
+    """Losing the audio costs the caller nothing they cannot read. Raising
+    here would cost them the reply, after the booking that produced it."""
+    from fastapi.testclient import TestClient
+    from receptionist.api import main
+
+    class Exploding:
+        def synthesize(self, text, language="en"):
+            raise RuntimeError("no voice model")
+
+    monkeypatch.setattr(main, "_voice", lambda: (FakeTranscriber(None), Exploding()))
+    client = TestClient(main.app)
+    call = client.post("/calls", json={}).json()
+    body = client.post(f"/calls/{call['call_id']}/utterance",
+                       json={"text": "my name is Priya Menon"}).json()
+    assert body["reply"]
+    assert body["audio"] is None

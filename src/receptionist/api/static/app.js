@@ -299,6 +299,8 @@ $("call-form").addEventListener("submit", async (e) => {
     live(`Could not reach the agent: ${error.message}`);
     return;
   }
+  // Typed at or spoken to, the agent answers aloud either way.
+  play(result.audio);
   await afterTurn(result);
   live(`Agent replied. Call state: ${result.state.replace(/_/g, " ")}.`);
 });

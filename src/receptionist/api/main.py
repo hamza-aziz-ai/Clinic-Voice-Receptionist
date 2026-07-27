@@ -173,7 +173,28 @@ def utterance(call_id: str, req: Utterance) -> dict[str, Any]:
         _naive_clinic_local(req.now) or datetime.now(),
         req.word_confidences,
     )
-    return {"reply": reply, **session.to_dict()}
+    # The agent speaks whether it was typed at or spoken to. A receptionist
+    # that only answers aloud when you happen to use the microphone is two
+    # different products wearing one interface.
+    return {"reply": reply, "audio": _speak(reply, session.language),
+            **session.to_dict()}
+
+
+def _speak(text: str, language: str) -> str | None:
+    """Base64 WAV of the reply, or None when voice is off or has no voice.
+
+    Never raises. Losing the audio costs the caller nothing they cannot read;
+    raising here would cost them the reply itself, after the booking that
+    produced it has already been made.
+    """
+    if not settings.voice_enabled or not text:
+        return None
+    try:
+        _, speaker = _voice()
+        audio = speaker.synthesize(text, language if language != "uncertain" else "en")
+    except Exception:
+        return None
+    return base64.b64encode(audio).decode() if audio else None
 
 
 def _voice():

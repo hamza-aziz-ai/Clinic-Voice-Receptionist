@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 261 passed
+$ python -m pytest -q          # 264 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -14,7 +14,9 @@ $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 caller bubbles on the right, agent on the left, an animated typing indicator
 while the turn is in flight, and the reply typing itself out as it is spoken.
 Hold the microphone, speak, release: local Whisper on the GPU, local speech
-back out, no paid service anywhere:
+back out, no paid service anywhere. **Typing works too, and is answered aloud
+just the same** — a receptionist that only speaks when you use the microphone
+would be two products wearing one interface.
 
 ```
 spoken : Hello my name is Priya Menon I need a cleaning tomorrow at three pm
