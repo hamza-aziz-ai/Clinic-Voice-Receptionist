@@ -9,16 +9,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..config import settings
 from ..evaluation.corpus import CASES, REFERENCE
 from ..evaluation.harness import evaluate
 from ..messaging.base import MockWhatsApp, render_template
 from ..nlu.language import LANGUAGE_NAMES
 from ..scheduling.calendar import Calendar, ClinicHours
+from ..telephony.bolna import BolnaWebhookError, parse_execution, verify_source
+from ..telephony.ingest import ingest_execution
 from ..workflow.call import CallHandler, CallSession
 
 STATIC = Path(__file__).parent / "static"
@@ -34,7 +37,10 @@ app = FastAPI(
 
 calendar = Calendar(hours=ClinicHours(), chairs=2)
 messaging = MockWhatsApp()
-handler = CallHandler(calendar, messaging)
+handler = CallHandler(
+    calendar, messaging,
+    clinic_name=settings.clinic_name, review_link=settings.review_link,
+)
 SESSIONS: dict[str, CallSession] = {}
 
 
@@ -119,6 +125,38 @@ def messages() -> list[dict[str, Any]]:
                 "body": render_template(m.template, m.language, m.parameters),
             })
     return out
+
+
+@app.post("/webhooks/bolna")
+async def bolna_webhook(
+    request: Request,
+    x_webhook_secret: str = Header(default=""),
+) -> dict[str, Any]:
+    """Post-call execution delivered by Bolna.
+
+    Returns 200 for anything successfully interpreted, including calls that
+    deliberately did not book. Bolna retries on non-2xx, and a call the
+    system correctly declined to book on is not a delivery failure - answering
+    503 to it would produce an endless redelivery loop over a payload that
+    will never book no matter how many times it arrives.
+    """
+    try:
+        verify_source(
+            remote_ip=request.client.host if request.client else "",
+            provided_secret=x_webhook_secret,
+            expected_secret=settings.bolna_webhook_secret,
+            allowed_ips=settings.bolna_allowed_ips,
+        )
+        execution = parse_execution(await request.json())
+    except BolnaWebhookError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:                       # malformed JSON body
+        raise HTTPException(400, f"unreadable payload: {exc}") from exc
+
+    result = ingest_execution(execution, handler)
+    if result.session is not None:
+        SESSIONS[result.session.call_id] = result.session
+    return result.to_dict()
 
 
 @app.get("/evaluation")

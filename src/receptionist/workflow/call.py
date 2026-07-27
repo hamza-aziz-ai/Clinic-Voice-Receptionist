@@ -54,6 +54,14 @@ class CallSession:
     readback_failures: int = 0
     collect_turns: int = 0
     messages: list[OutboundMessage] = field(default_factory=list)
+    # Upper bound on any slot's confidence for this call. 1.0 means the
+    # transcript is the only evidence. A replayed Bolna execution sets this
+    # from the extraction confidence labels, because poor audio is a property
+    # of the call rather than of one field. It can only ever lower a slot.
+    confidence_ceiling: float = 1.0
+    # Supplied when the call originates from a source that can redeliver, so
+    # a retry reserves the same appointment instead of a second one.
+    idempotency_key: str | None = None
 
     def say(self, text: str, note: str = "") -> str:
         self.transcript.append(Turn("agent", text, self.state, note))
@@ -162,6 +170,7 @@ class CallHandler:
     ) -> str:
         session.collect_turns += 1
         session.slots = extract_slots(text, now, word_confidences, session.slots)
+        self._apply_ceiling(session)
 
         if session.collect_turns > MAX_COLLECT_TURNS:
             return self._escalate(session, "too many turns without a complete booking")
@@ -216,6 +225,29 @@ class CallHandler:
             return self._escalate(session, "could not obtain a clear confirmation")
         return session.say("Sorry, was that a yes or a no?", "ambiguous confirmation")
 
+    @staticmethod
+    def _apply_ceiling(session: CallSession) -> None:
+        """Clamp freshly extracted confidences to the call-level ceiling.
+
+        Applied here, immediately after extraction and before anything reads
+        ``pending_confirmation``, so the clamp is what the booking decision
+        sees. Clamping afterwards would let a slot clear the gate on a
+        confidence the call never justified and get capped a turn too late.
+
+        Confirmed slots are left alone: the caller already said the value
+        aloud and agreed with it, which outranks a statistical label.
+        """
+        if session.confidence_ceiling >= 1.0:
+            return
+        for slot in session.slots.all_slots():
+            if not slot.filled or slot.confirmed:
+                continue
+            if slot.confidence > session.confidence_ceiling:
+                slot.confidence = session.confidence_ceiling
+                slot.notes.append(
+                    f"capped at {session.confidence_ceiling:.2f} by call audio quality"
+                )
+
     def _ask_for(self, slot_name: str) -> str:
         return {
             "patient_name": "Could I take your full name please?",
@@ -234,7 +266,7 @@ class CallHandler:
             procedure=s.procedure.value,
             start=s.appointment_time.value,
             language=session.language,
-            idempotency_key=f"call-{session.call_id}",
+            idempotency_key=session.idempotency_key or f"call-{session.call_id}",
         )
 
         if not result.ok:
@@ -252,7 +284,8 @@ class CallHandler:
 
         session.booking_id = result.booking.booking_id
         session.state = "notify"
-        self._queue_messages(session, result.booking)
+        if not result.replayed:
+            self._queue_messages(session, result.booking)
         session.state = "ended"
         return session.say(
             f"You're booked for a {result.booking.procedure.replace('_', ' ')} on "

@@ -77,6 +77,12 @@ class BookingResult:
     booking: Booking | None
     reason: str
     alternatives: list[datetime] = field(default_factory=list)
+    # True when the idempotency key matched an existing booking. Callers need
+    # this to distinguish "reserved just now" from "already reserved": the
+    # booking is correct either way, but re-running the side effects that
+    # follow a booking - the confirmation WhatsApp above all - would message
+    # the patient twice for one appointment.
+    replayed: bool = False
 
 
 class Calendar:
@@ -131,7 +137,10 @@ class Calendar:
             # Retry safety: the same key always returns the same booking.
             if idempotency_key and idempotency_key in self._by_key:
                 existing = self._bookings[self._by_key[idempotency_key]]
-                return BookingResult(True, existing, "idempotent replay of an existing booking")
+                return BookingResult(
+                    True, existing, "idempotent replay of an existing booking",
+                    replayed=True,
+                )
 
             open_ok, why = self.hours.is_open(start, duration)
             if not open_ok:

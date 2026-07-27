@@ -1,8 +1,40 @@
 from __future__ import annotations
+import pytest
 from fastapi.testclient import TestClient
 from receptionist.api.main import app
+from receptionist.config import settings
 
 client = TestClient(app)
+
+BOOKED_CALL = (
+    "assistant: Thank you for calling.\n"
+    "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm\n"
+    "assistant: I have your name as Priya Menon. Did I get that right?\n"
+    "user: yes that's right\n"
+    "user: my number is 0501234567\n"
+    "assistant: Is that correct?\n"
+    "user: yes correct\n"
+    "assistant: Shall I book that?\n"
+    "user: yes please\n"
+)
+
+
+def execution(transcript: str = BOOKED_CALL, **over) -> dict:
+    body = {
+        "id": "exec-api-1", "agent_id": "agent-1", "status": "completed",
+        "transcript": transcript,
+        "telephony_data": {"from_number": "+971501234567", "call_type": "inbound"},
+    }
+    body.update(over)
+    return body
+
+
+@pytest.fixture
+def webhook_open(monkeypatch):
+    """TestClient presents as 'testclient', which is not a Bolna address."""
+    monkeypatch.setattr(settings, "bolna_webhook_secret", "s3cret")
+    monkeypatch.setattr(settings, "bolna_extra_source_ips", ("testclient",))
+    return {"X-Webhook-Secret": "s3cret"}
 
 
 def test_health():
@@ -28,6 +60,64 @@ def test_evaluation_endpoint_reports_zero_silent_errors():
     data = client.get("/evaluation").json()
     assert data["cases"] >= 10
     assert all(row["wrong_silent"] == 0 for row in data["rows"])
+
+
+def test_webhook_rejects_unconfigured_deployment(monkeypatch):
+    """No secret set must not mean no check."""
+    monkeypatch.setattr(settings, "bolna_webhook_secret", "")
+    r = client.post("/webhooks/bolna", json=execution())
+    assert r.status_code == 403
+    assert "no webhook secret configured" in r.json()["detail"]
+
+
+def test_webhook_rejects_wrong_secret(webhook_open):
+    r = client.post("/webhooks/bolna", json=execution(),
+                    headers={"X-Webhook-Secret": "wrong"})
+    assert r.status_code == 403
+
+
+def test_webhook_rejects_unlisted_source(monkeypatch):
+    monkeypatch.setattr(settings, "bolna_webhook_secret", "s3cret")
+    monkeypatch.setattr(settings, "bolna_extra_source_ips", ())
+    r = client.post("/webhooks/bolna", json=execution(),
+                    headers={"X-Webhook-Secret": "s3cret"})
+    assert r.status_code == 403
+
+
+def test_webhook_books_and_queues_whatsapp(webhook_open):
+    body = client.post("/webhooks/bolna", json=execution(id="exec-books"),
+                       headers=webhook_open).json()
+    assert body["outcome"] == "booked"
+    assert body["booking_id"]
+
+    booking = next(b for b in client.get("/bookings").json()
+                   if b["booking_id"] == body["booking_id"])
+    assert booking["patient_name"] == "Priya Menon"
+
+    queued = [m for m in client.get("/messages").json()
+              if m["booking_id"] == body["booking_id"]]
+    assert {m["template"] for m in queued} == {
+        "appointment_confirmation", "appointment_reminder", "review_request"}
+
+
+def test_webhook_declines_to_book_without_confirmation(webhook_open):
+    body = client.post(
+        "/webhooks/bolna",
+        json=execution("assistant: Hi.\nuser: I need a cleaning tomorrow at 3pm",
+                       id="exec-callback"),
+        headers=webhook_open,
+    ).json()
+    assert body["outcome"] == "needs_callback"
+    assert body["booking_id"] is None
+
+
+def test_webhook_redelivery_is_a_200_not_a_duplicate(webhook_open):
+    """Bolna retries on non-2xx; a declined call is not a delivery failure."""
+    payload = execution(id="exec-retry")
+    first = client.post("/webhooks/bolna", json=payload, headers=webhook_open)
+    second = client.post("/webhooks/bolna", json=payload, headers=webhook_open)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["booking_id"] == second.json()["booking_id"]
 
 
 def test_console_is_served():
