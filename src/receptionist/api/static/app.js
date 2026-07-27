@@ -1,12 +1,21 @@
 "use strict";
-/* Transport only. Every figure shown here came from the server. */
+/* Transport only. Every figure shown here came from the server.
+
+   The chat is a rendering of session.transcript, not a second source of truth:
+   the server owns the conversation and this file redraws it. That matters
+   because the transcript is what the read-back gate acts on - a message that
+   exists only in the browser would be a message the booking logic never saw. */
 
 const $ = (id) => document.getElementById(id);
 const live = (msg) => { $("live-region").textContent = msg; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 let callId = null;
+let rendered = 0;          // how many transcript turns are already on screen
+let lastAudio = null;      // most recent agent audio, for the replay button
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -24,30 +33,130 @@ function selectTab(tab) {
     t.setAttribute("aria-selected", String(selected));
     $(t.getAttribute("aria-controls")).hidden = !selected;
   });
-  live(`${tab.textContent} panel shown`);
+  tab.focus();
 }
-tabs.forEach((tab) => {
+tabs.forEach((tab, i) => {
   tab.addEventListener("click", () => selectTab(tab));
   tab.addEventListener("keydown", (e) => {
-    const i = tabs.indexOf(tab);
-    if (e.key === "ArrowRight") { tabs[(i + 1) % tabs.length].focus(); e.preventDefault(); }
-    if (e.key === "ArrowLeft")  { tabs[(i - 1 + tabs.length) % tabs.length].focus(); e.preventDefault(); }
+    const next = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (!next) return;
+    e.preventDefault();
+    selectTab(tabs[(i + next + tabs.length) % tabs.length]);
   });
 });
 
-/* ---------------- rendering ---------------- */
-function renderTranscript(session) {
-  const el = $("transcript");
-  if (!session || !session.transcript.length) {
-    el.innerHTML = '<li class="empty">No call in progress.</li>';
+/* ---------------- chat ----------------
+   Messages are appended rather than the list being rebuilt, so the typewriter
+   reveal is not restarted every time a booking or message table refreshes. */
+function bubble(turn) {
+  const li = document.createElement("li");
+  li.className = `msg ${turn.speaker === "agent" ? "agent" : "caller"}`;
+
+  const who = document.createElement("span");
+  who.className = "visually-hidden";
+  who.textContent = turn.speaker === "agent" ? "Agent said: " : "You said: ";
+
+  const body = document.createElement("span");
+  body.className = "bubble";
+
+  const text = document.createElement("span");
+  text.className = "text";
+
+  body.append(text);
+  li.append(who, body);
+
+  if (turn.note) {
+    const note = document.createElement("span");
+    note.className = "note";
+    note.textContent = turn.note;
+    li.append(note);
+  }
+  return { li, text };
+}
+
+/* Reveal an agent line a few characters at a time.
+
+   Purely visual: the element is aria-hidden while it fills, and the finished
+   sentence is written into a visually-hidden node afterwards so the live
+   region announces it once instead of on every frame. A screen reader user
+   hearing "W… Wh… Wha…" would be worse served than one who waits. */
+function typeInto(node, str) {
+  if (REDUCED_MOTION || !str) { node.textContent = str; return Promise.resolve(); }
+  node.setAttribute("aria-hidden", "true");
+  return new Promise((resolve) => {
+    let i = 0;
+    const step = Math.max(1, Math.round(str.length / 60));
+    const timer = setInterval(() => {
+      i = Math.min(str.length, i + step);
+      node.textContent = str.slice(0, i);
+      scrollChat();
+      if (i >= str.length) {
+        clearInterval(timer);
+        node.removeAttribute("aria-hidden");
+        resolve();
+      }
+    }, 16);
+  });
+}
+
+function scrollChat() {
+  const chat = $("chat");
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showTyping() {
+  if ($("typing")) return;
+  const li = document.createElement("li");
+  li.className = "msg agent typing";
+  li.id = "typing";
+  // The dots are decorative; the label is what assistive tech reads.
+  li.innerHTML =
+    '<span class="bubble"><span class="dots" aria-hidden="true">' +
+    "<i></i><i></i><i></i></span>" +
+    '<span class="visually-hidden">The agent is typing</span></span>';
+  $("chat").append(li);
+  scrollChat();
+}
+
+function hideTyping() {
+  const el = $("typing");
+  if (el) el.remove();
+}
+
+/* Draw any transcript turns the screen has not shown yet. */
+async function renderChat(session, { animate = true } = {}) {
+  const chat = $("chat");
+  const turns = (session && session.transcript) || [];
+
+  if (!turns.length) {
+    chat.innerHTML = '<li class="empty">No call in progress. Say something, or press New call.</li>';
+    rendered = 0;
     return;
   }
-  el.innerHTML = session.transcript.map((t) => `
-    <li class="${t.speaker === "agent" ? "agent" : "caller"}">
-      <span class="who">${t.speaker === "agent" ? "Agent" : "Caller"}:</span>
-      <span>${esc(t.text)}</span>
-      ${t.note ? `<span class="note">${esc(t.note)}</span>` : ""}
-    </li>`).join("");
+  if (rendered === 0) chat.innerHTML = "";
+
+  for (const turn of turns.slice(rendered)) {
+    const { li, text } = bubble(turn);
+    chat.append(li);
+    scrollChat();
+    if (animate && turn.speaker === "agent") {
+      await typeInto(text, turn.text);
+    } else {
+      text.textContent = turn.text;
+    }
+  }
+  rendered = turns.length;
+  scrollChat();
+}
+
+function renderState(session) {
+  const state = (session && session.state) || "ready";
+  $("chat-state").textContent = {
+    greeting: "Ringing…", detect_language: "Listening",
+    collect: "Collecting details", confirm: "Confirming",
+    book: "Booking", notify: "Sending confirmation",
+    ended: "Call ended", escalated: "Handed to reception",
+  }[state] || state.replace(/_/g, " ");
 }
 
 function renderSlots(session) {
@@ -60,10 +169,6 @@ function renderSlots(session) {
     else if (s.needs_confirmation) { status = "Read-back required";  cls = "status-warn"; }
     else                           { status = "Accepted";            cls = "status-ok"; }
     const pct = Math.round(s.confidence * 100);
-    // The bar is decoration over a number that is already there, so it is
-    // hidden from assistive tech rather than duplicated as an ARIA meter.
-    // Tinting it when the slot is below threshold makes the confidence and
-    // status columns agree at a glance instead of needing to be cross-read.
     const below = s.needs_confirmation ? " below" : "";
     return `<tr>
       <th scope="row">${esc(s.name.replace(/_/g, " "))}</th>
@@ -79,6 +184,15 @@ function renderSlots(session) {
   }).join("");
 }
 
+/* ---------------- audio ---------------- */
+function play(base64) {
+  if (!base64) return;
+  lastAudio = base64;
+  // Follows a user gesture (send or mic release), so autoplay policy allows it.
+  new Audio(`data:audio/wav;base64,${base64}`).play().catch(() => {});
+}
+
+/* ---------------- other panels ---------------- */
 async function refreshBookings() {
   const rows = await api("/bookings");
   $("bookings").innerHTML = rows.length ? rows.map((b) => `<tr>
@@ -140,8 +254,17 @@ async function refreshEval() {
 async function startCall() {
   const s = await api("/calls", { method: "POST", body: JSON.stringify({ caller_number: "+971500000000" }) });
   callId = s.call_id;
-  renderTranscript(s); renderSlots(s);
+  rendered = 0;
+  await renderChat(s, { animate: false });
+  renderSlots(s); renderState(s);
   live("New call started. The agent has greeted the caller.");
+}
+
+async function afterTurn(result) {
+  hideTyping();
+  await renderChat(result);
+  renderSlots(result); renderState(result);
+  await Promise.all([refreshBookings(), refreshMessages()]);
 }
 
 $("call-form").addEventListener("submit", async (e) => {
@@ -151,23 +274,32 @@ $("call-form").addEventListener("submit", async (e) => {
   const text = box.value.trim();
 
   if (!text) {
-    err.textContent = "Enter what the caller said before sending.";
+    err.textContent = "Type what the caller said, or hold the microphone to speak.";
     err.hidden = false;
     box.setAttribute("aria-invalid", "true");
     box.focus();
-    live("Error: the utterance field is empty.");
+    live("Error: nothing to send.");
     return;
   }
   err.hidden = true;
   box.removeAttribute("aria-invalid");
 
   if (!callId) await startCall();
-  const result = await api(`/calls/${callId}/utterance`, {
-    method: "POST", body: JSON.stringify({ text, now: new Date().toISOString() }),
-  });
   box.value = "";
-  renderTranscript(result); renderSlots(result);
-  await Promise.all([refreshBookings(), refreshMessages()]);
+  autoGrow();
+  showTyping();
+
+  let result;
+  try {
+    result = await api(`/calls/${callId}/utterance`, {
+      method: "POST", body: JSON.stringify({ text, now: new Date().toISOString() }),
+    });
+  } catch (error) {
+    hideTyping();
+    live(`Could not reach the agent: ${error.message}`);
+    return;
+  }
+  await afterTurn(result);
   live(`Agent replied. Call state: ${result.state.replace(/_/g, " ")}.`);
 });
 
@@ -184,16 +316,23 @@ let recorder = null, chunks = [];
 
 async function startRecording() {
   if (recorder) return;
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  });
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (err) {
+    live(`Microphone unavailable: ${err.message}`);
+    return;
+  }
   chunks = [];
   recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   recorder.onstop = () => stream.getTracks().forEach((t) => t.stop());
   recorder.start();
-  $("talk").textContent = "● Recording — release to send";
-  live("Recording. Release the button to send.");
+  $("talk").setAttribute("aria-pressed", "true");
+  $("talk").classList.add("recording");
+  live("Recording. Release to send.");
 }
 
 async function stopRecording() {
@@ -202,11 +341,14 @@ async function stopRecording() {
   recorder.stop();
   await done;
   recorder = null;
-  $("talk").textContent = "🎤 Hold to talk";
+  $("talk").setAttribute("aria-pressed", "false");
+  $("talk").classList.remove("recording");
   if (!chunks.length) return;
 
   if (!callId) await startCall();
+  showTyping();
   live("Transcribing…");
+
   const form = new FormData();
   form.append("audio", new Blob(chunks, { type: "audio/webm" }), "turn.webm");
 
@@ -216,21 +358,19 @@ async function stopRecording() {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     result = await res.json();
   } catch (err) {
+    hideTyping();
     live(`Voice failed: ${err.message}. Is the server running with VOICE_ENABLED=1?`);
     return;
   }
 
-  renderTranscript(result); renderSlots(result);
-  await Promise.all([refreshBookings(), refreshMessages()]);
-
-  if (result.audio) {
-    // Played, not autoplayed on load - this follows a user gesture, so the
-    // browser allows it.
-    new Audio(`data:audio/wav;base64,${result.audio}`).play().catch(() => {});
+  if (!result.heard) {
+    hideTyping();
+    live("Nothing intelligible was heard. Try again, closer to the microphone.");
+    return;
   }
-  live(
-    `Heard: "${result.heard}". Agent replied${result.audio ? " aloud" : " in text only"}.`
-  );
+  play(result.audio);
+  await afterTurn(result);
+  live(`Heard: "${result.heard}". Agent replied${result.audio ? " aloud" : " in text only"}.`);
 }
 
 const talk = $("talk");
@@ -248,15 +388,34 @@ talk.addEventListener("keyup", (e) => {
   if (e.key === " " || e.key === "Enter") { e.preventDefault(); stopRecording(); }
 });
 
+/* ---------------- composer ---------------- */
+function autoGrow() {
+  const box = $("utterance");
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
+}
+$("utterance").addEventListener("input", autoGrow);
+$("utterance").addEventListener("keydown", (e) => {
+  // Enter sends, Shift+Enter makes a new line - what every chat client does.
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("call-form").requestSubmit();
+  }
+});
+
 $("new-call").addEventListener("click", async () => { callId = null; await startCall(); });
 $("dispatch").addEventListener("click", runDispatch);
 document.querySelectorAll(".chip").forEach((c) =>
-  c.addEventListener("click", () => { $("utterance").value = c.dataset.fill; $("utterance").focus(); }));
+  c.addEventListener("click", () => {
+    $("utterance").value = c.dataset.fill;
+    autoGrow();
+    $("utterance").focus();
+  }));
 
 (async function init() {
   const h = await api("/health");
   $("clinic-status").textContent =
-    `${h.chairs} chairs · ${h.languages.length} languages supported · ${h.active_bookings} active bookings`;
+    `${h.chairs} chairs · ${h.languages.length} languages · ${h.active_bookings} active bookings`;
   await startCall();
   await Promise.all([refreshBookings(), refreshMessages(), refreshEval()]);
   live("Console ready.");

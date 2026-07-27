@@ -210,3 +210,49 @@ def test_aware_timestamp_is_converted_not_merely_stripped():
     slot = next(x for x in body["slots"] if x["name"] == "appointment_time")
     # 27 July 21:00 clinic-local, so "tomorrow" is the 28th.
     assert slot["value"].startswith("2026-07-28T15:00")
+
+
+# ------------------------------------------------------------- chat console
+def test_the_console_is_a_chat_log_not_a_transcript_table():
+    html = client.get("/console/").text
+    # role="log" plus a polite live region is what makes each completed
+    # message announce itself once to a screen reader.
+    assert 'role="log"' in html
+    assert 'id="chat"' in html
+    assert 'aria-live="polite"' in html
+
+
+def test_the_composer_has_a_labelled_input_and_a_microphone():
+    html = client.get("/console/").text
+    assert 'label class="visually-hidden" for="utterance"' in html
+    assert 'id="talk"' in html
+    # A mic button with no accessible name is an unlabelled icon.
+    assert 'aria-label="Hold to talk"' in html
+    assert 'aria-pressed="false"' in html
+
+
+def test_the_typing_indicator_is_announced_as_text_not_only_dots():
+    js = client.get("/console/app.js").text
+    assert "The agent is typing" in js
+    assert 'id="typing"' in js or "typing" in js
+
+
+def test_the_typewriter_never_announces_partial_words():
+    """A screen reader hearing "W... Wh... Wha..." is worse served than one
+    that waits for the finished sentence."""
+    js = client.get("/console/app.js").text
+    assert "aria-hidden" in js
+    assert "prefers-reduced-motion" in js
+
+
+def test_agent_audio_is_played_when_the_server_returns_it():
+    js = client.get("/console/app.js").text
+    assert "data:audio/wav;base64," in js
+
+
+def test_the_chat_renders_from_the_server_transcript():
+    """The browser must not invent turns: the transcript is what the read-back
+    gate acted on, so a message existing only client-side would be one the
+    booking logic never saw."""
+    js = client.get("/console/app.js").text
+    assert "session.transcript" in js

@@ -17,7 +17,7 @@
 <div class="tabbar">
   <nav aria-label="Sections">
     <ul class="tabs" role="tablist">
-      <li><button role="tab" aria-selected="true"  aria-controls="panel-calls"   id="tab-calls">Calls</button></li>
+      <li><button role="tab" aria-selected="true"  aria-controls="panel-calls"   id="tab-calls">Call</button></li>
       <li><button role="tab" aria-selected="false" aria-controls="panel-bookings" id="tab-bookings">Bookings</button></li>
       <li><button role="tab" aria-selected="false" aria-controls="panel-messages" id="tab-messages">Messages</button></li>
       <li><button role="tab" aria-selected="false" aria-controls="panel-eval"     id="tab-eval">Accuracy</button></li>
@@ -30,57 +30,71 @@
 <main id="main" tabindex="-1">
 
   <section role="tabpanel" id="panel-calls" aria-labelledby="tab-calls">
-    <h2>Simulate an inbound call</h2>
+    <div class="call-layout">
 
-    <div class="card">
-      <form id="call-form" novalidate>
-        <div class="field">
-          <label for="utterance">What the caller says</label>
-          <p class="hint" id="utterance-hint">
-            Type in English, Tamil, Kannada, Malayalam or Hindi. The agent detects
-            the language and asks you to confirm anything it is unsure of.
-          </p>
-          <textarea id="utterance" name="utterance" rows="3"
-                    aria-describedby="utterance-hint utterance-error" required></textarea>
+      <div class="chat-column">
+        <div class="card chat-card">
+          <div class="chat-head">
+            <h2 id="chat-heading">Al&nbsp;Noor Dental</h2>
+            <p class="chat-sub" id="chat-state">Ready</p>
+            <button type="button" id="new-call" class="ghost">New call</button>
+          </div>
+
+          <!-- role="log" with a polite live region: each completed message is
+               announced once. The typewriter reveal is aria-hidden so a screen
+               reader hears the finished sentence rather than every keystroke. -->
+          <ol class="chat" id="chat" role="log" aria-live="polite"
+              aria-label="Conversation with the receptionist">
+            <li class="empty">No call in progress. Say something, or press New call.</li>
+          </ol>
+
+          <form class="composer" id="call-form" novalidate>
+            <label class="visually-hidden" for="utterance">What the caller says</label>
+            <textarea id="utterance" name="utterance" rows="1"
+                      placeholder="Type what the caller says…"
+                      aria-describedby="utterance-error"></textarea>
+            <button type="button" id="talk" class="icon" aria-pressed="false"
+                    title="Hold to talk" aria-label="Hold to talk">
+              <span aria-hidden="true">🎤</span>
+            </button>
+            <button type="submit" class="primary icon" title="Send"
+                    aria-label="Send to agent"><span aria-hidden="true">➤</span></button>
+          </form>
           <p class="error" id="utterance-error" hidden></p>
-        </div>
-        <div class="row">
-          <button type="submit" class="primary">Send to agent</button>
-          <button type="button" id="new-call">Start a new call</button>
-          <button type="button" id="talk" aria-describedby="talk-hint">🎤 Hold to talk</button>
-        </div>
-        <p class="hint" id="talk-hint">
-          Push-to-talk: hold the button, speak, release. Requires the server to
-          be started with <code>VOICE_ENABLED=1</code> and microphone permission.
-          Tamil and Kannada have no free voice model, so the agent replies in
-          text for those languages rather than mispronouncing them.
-        </p>
-        <fieldset class="examples">
-          <legend>Example utterances</legend>
-          <button type="button" class="chip" data-fill="Hello my name is Priya Menon I need a cleaning tomorrow at 3 pm my number is nine seven one five zero one two three four five six seven">English · full booking</button>
-          <button type="button" class="chip" data-fill="നമസ്കാരം, my name is Anjali Nair, എനിക്ക് filling വേണം tomorrow at 4 pm, number zero five zero one two three four five six seven">Malayalam · code-switched</button>
-          <button type="button" class="chip" data-fill="வணக்கம், my name is Karthik Raman, எனக்கு cleaning வேண்டும் tomorrow morning">Tamil · vague time</button>
-        </fieldset>
-      </form>
-    </div>
 
-    <div class="card">
-      <h3>Conversation</h3>
-      <ol class="transcript" id="transcript"><li class="empty">No call in progress.</li></ol>
-    </div>
+          <p class="hint composer-hint">
+            Hold the microphone to speak — needs <code>VOICE_ENABLED=1</code> and
+            microphone permission. The agent replies aloud in all five languages.
+          </p>
 
-    <div class="card">
-      <h3 id="slots-heading">Extracted details</h3>
-      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="slots-heading">
-        <table aria-labelledby="slots-heading">
-          <caption>Confidence below each field's threshold triggers a spoken read-back before anything is booked.</caption>
-          <thead>
-            <tr><th scope="col">Field</th><th scope="col">Value</th>
-                <th scope="col">Confidence</th><th scope="col">Status</th></tr>
-          </thead>
-          <tbody id="slots"><tr><td colspan="4" class="empty">No details captured yet.</td></tr></tbody>
-        </table>
+          <div class="chips">
+            <span class="chips-label" id="examples-label">Try</span>
+            <span role="group" aria-labelledby="examples-label">
+              <button type="button" class="chip" data-fill="Hello my name is Priya Menon I need a cleaning tomorrow at 3 pm my number is nine seven one five zero one two three four five six seven">English · full booking</button>
+              <button type="button" class="chip" data-fill="നമസ്കാരം, my name is Anjali Nair, എനിക്ക് filling വേണം tomorrow at 4 pm, number zero five zero one two three four five six seven">Malayalam · code-switched</button>
+              <button type="button" class="chip" data-fill="வணக்கம், my name is Karthik Raman, எனக்கு cleaning வேண்டும் tomorrow morning">Tamil · vague time</button>
+              <button type="button" class="chip" data-fill="Hi, my name is Hamza Aziz. I think my wisdom tooth is aching on my left side">English · symptom</button>
+            </span>
+          </div>
+        </div>
       </div>
+
+      <aside class="slots-column" aria-labelledby="slots-heading">
+        <div class="card">
+          <h3 id="slots-heading">Extracted details</h3>
+          <div class="table-wrap" tabindex="0" role="region" aria-labelledby="slots-heading">
+            <table>
+              <caption>Confidence below each field's threshold triggers a spoken read-back before anything is booked.</caption>
+              <thead>
+                <tr><th scope="col">Field</th><th scope="col">Value</th>
+                    <th scope="col">Confidence</th><th scope="col">Status</th></tr>
+              </thead>
+              <tbody id="slots"><tr><td colspan="4" class="empty">No details captured yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </aside>
+
     </div>
   </section>
 

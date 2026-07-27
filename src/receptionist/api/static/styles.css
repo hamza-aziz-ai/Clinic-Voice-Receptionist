@@ -269,6 +269,119 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .controls label { margin-bottom: var(--s1); }
 .controls > div { display: flex; flex-direction: column; }
 
+/* ---------------------------------------------------------------- chat */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+
+.call-layout {
+  display: grid; gap: var(--s4);
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  align-items: start;
+  margin-top: var(--s5);
+}
+
+.chat-card { display: flex; flex-direction: column; }
+
+.chat-head {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding-bottom: var(--s3); margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+.chat-head h2 { margin: 0; font-size: 1.05rem; }
+.chat-sub {
+  margin: 0; color: var(--muted); font-size: .85rem;
+  margin-right: auto;
+}
+button.ghost {
+  background: none; border-color: transparent; color: var(--accent);
+  font-size: .88rem; padding: var(--s1) var(--s2); min-height: 2rem;
+}
+button.ghost:hover { background: var(--accent-soft); border-color: transparent; }
+
+.chat {
+  list-style: none; margin: 0; padding: var(--s2) var(--s1);
+  display: flex; flex-direction: column; gap: var(--s3);
+  /* Bounded so the composer stays reachable without scrolling the page, and
+     the log scrolls within itself the way every chat client behaves. */
+  height: clamp(18rem, 52vh, 30rem);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.msg { display: flex; flex-direction: column; max-width: 82%; }
+.msg.caller { align-self: flex-end; align-items: flex-end; }
+.msg.agent { align-self: flex-start; align-items: flex-start; }
+
+.bubble {
+  padding: var(--s3) var(--s4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  /* Long numbers and Indic text must wrap rather than widen the column. */
+  overflow-wrap: anywhere;
+}
+.msg.caller .bubble {
+  background: var(--accent); color: var(--accent-text);
+  border-color: var(--accent);
+  border-bottom-right-radius: var(--radius-sm);
+}
+.msg.agent .bubble { border-bottom-left-radius: var(--radius-sm); }
+
+.msg .note {
+  font-size: .78rem; color: var(--muted); font-style: italic;
+  margin-top: var(--s1); padding: 0 var(--s2);
+}
+
+/* Typing indicator. The dots are decorative - the label beside them is what
+   assistive technology announces. */
+.typing .bubble { padding: var(--s3) var(--s4); }
+.dots { display: inline-flex; gap: 4px; align-items: center; height: 1em; }
+.dots i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted); display: block;
+  animation: blink 1.2s infinite ease-in-out both;
+}
+.dots i:nth-child(2) { animation-delay: .18s; }
+.dots i:nth-child(3) { animation-delay: .36s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* ---------------------------------------------------------------- composer */
+.composer {
+  display: flex; gap: var(--s2); align-items: flex-end;
+  padding-top: var(--s3); border-top: 1px solid var(--border);
+}
+.composer textarea {
+  flex: 1; resize: none; min-height: 2.6rem; max-height: 10rem;
+  padding: var(--s2) var(--s3); line-height: 1.4;
+}
+button.icon {
+  min-width: 2.75rem; min-height: 2.75rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; padding: 0 var(--s3);
+}
+button.recording {
+  background: var(--error-soft); border-color: var(--error); color: var(--error);
+}
+.composer-hint { margin: var(--s2) 0 0; font-size: .82rem; }
+
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s3); }
+.chips-label {
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 650;
+}
+
+@media (max-width: 62rem) {
+  .call-layout { grid-template-columns: minmax(0, 1fr); }
+  .chat { height: clamp(16rem, 44vh, 24rem); }
+}
+
 /* ---------------------------------------------------------------- transcript */
 .transcript {
   list-style: none; padding: 0; margin: 0;

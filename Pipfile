@@ -25,10 +25,6 @@ piper-tts = "*"
 torch = {version = "*", index = "downloadpytorch"}
 torchaudio = {version = "*", index = "downloadpytorch"}
 transformers = "*"
-huggingface = "*"
-parler-tts = "*"
-onnx = "*"
-tiktoken = "*"
 
 [dev-packages]
 pytest = "*"

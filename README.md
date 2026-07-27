@@ -6,12 +6,15 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 255 passed
+$ python -m pytest -q          # 261 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
-**It talks.** Hold the button in the console, speak, release — local Whisper
-on the GPU, local Piper back out, no paid service anywhere:
+**It talks, and it looks like a chat.** The console is a messaging interface —
+caller bubbles on the right, agent on the left, an animated typing indicator
+while the turn is in flight, and the reply typing itself out as it is spoken.
+Hold the microphone, speak, release: local Whisper on the GPU, local speech
+back out, no paid service anywhere:
 
 ```
 spoken : Hello my name is Priya Menon I need a cleaning tomorrow at three pm
