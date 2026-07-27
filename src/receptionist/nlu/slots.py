@@ -97,6 +97,11 @@ class Slot:
     source: str = "unfilled"
     confirmed: bool = False
     notes: list[str] = field(default_factory=list)
+    # The day, when the caller gave one but no time of day. The slot stays
+    # unfilled - a date is not an appointment - but the day is not thrown
+    # away either, so the follow-up can ask "what time on Saturday?" instead
+    # of starting again. See extract_slots.
+    pending_date: Any = None
 
     @property
     def filled(self) -> bool:
@@ -233,24 +238,45 @@ def extract_slots(
 
     # -- appointment time --------------------------------------------------
     if not slots.appointment_time.confirmed:
+        pending = slots.appointment_time.pending_date
         m = TIME_SPAN.search(transcript)
-        if m:
-            span = m.group(1).strip()
-            parsed = normalise_datetime(span, reference_time)
-            if parsed:
-                conf = _asr_confidence(word_confidences, span)
-                notes = []
-                if parsed.time_was_vague:
-                    # "tomorrow morning" is a date, not an appointment.
-                    conf *= 0.80
-                    notes.append("time of day inferred, not stated")
-                if parsed.when < reference_time:
-                    conf *= 0.5
-                    notes.append("resolved to a past time")
-                slots.appointment_time = Slot(
-                    "appointment_time", raw_text=span, value=parsed.when,
-                    confidence=max(0.0, min(1.0, conf)), source="asr", notes=notes,
-                )
+        span = m.group(1).strip() if m else None
+
+        # A bare time answering "what time on Saturday?" has no day token in
+        # it, so TIME_SPAN cannot see it at all. Reattach the day we already
+        # understood and let the same parser handle it.
+        parse_input = span
+        if span is None and pending is not None:
+            parse_input = f"{pending.day:02d}/{pending.month:02d} {transcript.strip()}"
+
+        parsed = normalise_datetime(parse_input, reference_time) if parse_input else None
+
+        if parsed and parsed.time_was_vague:
+            # "Saturday morning" is a day, not an appointment. The old code
+            # filled the slot with 10:00 and read it back as "That's Saturday
+            # 01 August at 10:00 AM. Shall I book that?" - proposing an hour
+            # the caller never said and inviting a yes to it. A yes there
+            # books a real chair at a time nobody chose.
+            #
+            # The slot stays unfilled so the collect loop asks for the time,
+            # and the day is kept so the question can be specific.
+            slots.appointment_time = Slot(
+                "appointment_time", raw_text=span, value=None,
+                confidence=0.0, source="date_only",
+                notes=["day understood; time of day not stated"],
+                pending_date=parsed.when.date(),
+            )
+        elif parsed:
+            conf = _asr_confidence(word_confidences, span or transcript)
+            notes = []
+            if parsed.when < reference_time:
+                conf *= 0.5
+                notes.append("resolved to a past time")
+            slots.appointment_time = Slot(
+                "appointment_time", raw_text=span or transcript.strip(),
+                value=parsed.when,
+                confidence=max(0.0, min(1.0, conf)), source="asr", notes=notes,
+            )
 
     # -- procedure ---------------------------------------------------------
     if not slots.procedure.confirmed:

@@ -27,7 +27,14 @@ CASES: list[TestCase] = [
         "This is Ahmed Al Rashid, I have tooth pain, can I come in on Wednesday morning? "
         "Call me on zero five five one two three four five six seven",
         {"patient_name": "Ahmed Al Rashid", "procedure": "checkup",
-         "appointment_time": datetime(2026, 7, 29, 10, 0), "phone": "+971551234567"},
+         "phone": "+971551234567"},
+        note=(
+            "no appointment_time expected: 'Wednesday morning' is a day, not "
+            "an appointment. This case used to expect 10:00, which was the "
+            "ground truth encoding the extractor's own guess - while en-04 "
+            "already omitted it for 'Sunday evening'. Two cases, same "
+            "situation, opposite expectations, and the corpus scored 100%"
+        ),
     ),
     TestCase(
         "en-03", "en",

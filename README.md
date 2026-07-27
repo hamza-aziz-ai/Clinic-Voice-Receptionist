@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 197 passed
+$ python -m pytest -q          # 202 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -54,9 +54,19 @@ back to the caller for explicit confirmation, per field:
 caller: my name is Priya Menon I need a cleaning tomorrow at 3 pm
         my number is nine seven one five zero one two three four five six seven
 agent : I have your name as Priya Menon. Did I get that right?
-agent : Let me confirm your number: 9 7 1 5 0 1 2 3 4 5 6 7. Is that correct?
+agent : Let me confirm your number: plus 971 501 234 567. Is that correct?
 agent : That's Tuesday 28 July at 03:00 PM. Shall I book that?
 ```
+
+Numbers are read back in groups. Twelve digits in one run are unverifiable by
+ear, so the caller says yes because they lost track — which makes the
+read-back theatre rather than a check.
+
+A **vague time is never resolved into a proposal.** "Saturday morning" is a
+day, not an appointment, so the slot stays empty and the agent asks *"What
+time on Saturday 01 August would suit you?"* — keeping the day, asking only
+for the half that is missing. Reading back an invented `10:00 AM` and
+collecting a yes reserves a real chair at an hour nobody chose.
 
 Read-backs are per-slot deliberately. "Did I get all that right?" after a
 four-field summary produces a yes that means nothing — a caller cannot hold
@@ -81,9 +91,9 @@ exhaustive and runs on every commit.
 | Simulated ASR error | Slot accuracy | Language accuracy | Caught by read-back | **Silent errors** |
 |---:|---:|---:|---:|---:|
 | 0% | 100.0% | 100.0% | 0 | **0** |
-| 15% | 82.5% | 100.0% | 7 | **0** |
-| 30% | 75.0% | 100.0% | 10 | **0** |
-| 50% | 75.0% | 100.0% | 10 | **0** |
+| 15% | 82.1% | 100.0% | 7 | **0** |
+| 30% | 74.4% | 100.0% | 10 | **0** |
+| 50% | 74.4% | 100.0% | 10 | **0** |
 
 A **silent error** is a wrong value that was *not* flagged for read-back. It
 is the only kind that reaches a patient, and it's the number the system is

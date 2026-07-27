@@ -1,6 +1,6 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime
 import pytest
 from receptionist.messaging.base import MockWhatsApp, TEMPLATES, render_template
 from receptionist.scheduling.calendar import Calendar, ClinicHours
@@ -216,7 +216,7 @@ def test_the_same_question_is_never_asked_twice():
     session = handler.start("+918447644188")
     replies = _run(handler, session, [
         "Hi, my name is Hamza Aziz.", "+91 8447644188", "Yes, that is correct.",
-        "Saturday morning works fine for me", "Yes please",
+        "Saturday morning works fine for me", "10:30 please",
         "Are you asking about the procedure?",
         "I don't understand what you are trying to ask.",
     ])
@@ -228,7 +228,7 @@ def test_confusion_is_acknowledged_rather_than_answered_with_a_repeat():
     handler = _handler()
     session = handler.start()
     _run(handler, session, ["my name is Hamza Aziz", "0501234567", "yes",
-                            "Saturday morning", "yes"])
+                            "Saturday morning", "10:30"])
     reply = handler.handle_utterance(
         session, "I don't understand what you are trying to ask.", NOW_REAL)
     assert reply.startswith("Sorry, let me put that differently")
@@ -239,7 +239,7 @@ def test_a_slot_that_keeps_failing_reaches_a_human():
     session = handler.start()
     _run(handler, session, [
         "Hi, my name is Hamza Aziz.", "+91 8447644188", "Yes, that is correct.",
-        "Saturday morning works fine for me", "Yes please",
+        "Saturday morning works fine for me", "10:30 please",
         "Are you asking about the procedure?",
         "I don't understand what you are trying to ask.",
         "Sorry, still not sure what you mean.",
@@ -247,3 +247,61 @@ def test_a_slot_that_keeps_failing_reaches_a_human():
     assert session.state == "escalated"
     assert "procedure" in session.escalation_reason
     assert handler.calendar.active() == []
+
+
+def test_a_vague_time_of_day_does_not_become_an_appointment():
+    """"Saturday morning" is a day, not a time. The old code filled the slot
+    with 10:00 and read it back as "That's Saturday 01 August at 10:00 AM.
+    Shall I book that?" - proposing an hour the caller never said, where a yes
+    reserves a real chair at a time nobody chose."""
+    from receptionist.nlu.slots import extract_slots
+    slots = extract_slots("Saturday morning works fine for me", NOW_REAL)
+    assert slots.appointment_time.value is None
+    assert not slots.appointment_time.usable
+    assert slots.appointment_time.pending_date == date(2026, 8, 1)
+
+
+def test_the_day_is_not_thrown_away_with_the_vague_time():
+    """Asking "what day and time would suit you?" again, straight after the
+    caller said Saturday, reads as not having listened."""
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Hamza Aziz", "0501234567", "yes"])
+    reply = handler.handle_utterance(session, "Saturday morning works", NOW_REAL)
+    assert "Saturday 01 August" in reply
+    assert "What day" not in reply
+
+
+def test_a_bare_time_reply_completes_the_pending_day():
+    """The answer to "what time on Saturday?" carries no day token, so the
+    span regex cannot see it on its own."""
+    from receptionist.nlu.slots import extract_slots
+    slots = extract_slots("Saturday morning works", NOW_REAL)
+    slots = extract_slots("10:30 please", NOW_REAL, existing=slots)
+    assert slots.appointment_time.value == datetime(2026, 8, 1, 10, 30)
+    assert slots.appointment_time.usable
+
+
+def test_a_stated_time_still_books_without_a_second_question():
+    """The change must not add a question for callers who were specific."""
+    from receptionist.nlu.slots import extract_slots
+    slots = extract_slots("Saturday at 2 pm", NOW_REAL)
+    assert slots.appointment_time.value == datetime(2026, 8, 1, 14, 0)
+    assert slots.appointment_time.usable
+
+
+def test_the_whole_call_books_at_the_time_the_caller_chose():
+    handler = _handler()
+    session = handler.start("+918447644188")
+    _run(handler, session, [
+        "Hi, my name is Hamza Aziz.", "+91 8447644188", "Yes, that is correct.",
+        "Saturday morning works fine for me", "10:30 please",
+        "I think my wisdom tooth is not coming up properly and its aching "
+        "my left side of the jaw down to the neck.",
+        "yes please",
+    ])
+    assert session.state == "ended"
+    booking = handler.calendar.get(session.booking_id)
+    assert booking.start == datetime(2026, 8, 1, 10, 30)
+    assert booking.procedure == "checkup"
+    assert booking.patient_name == "Hamza Aziz"

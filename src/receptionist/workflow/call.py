@@ -250,6 +250,8 @@ class CallHandler:
                 )
 
             prompt = self._ask_for(name, attempt)
+            if name == "appointment_time" and missing[0].pending_date:
+                prompt = self._ask_time_on(missing[0].pending_date, attempt)
             if attempt > 1 and sounds_confused(text):
                 prompt = f"Sorry, let me put that differently. {prompt}"
             return session.say(prompt, f"missing {name} (attempt {attempt})")
@@ -379,6 +381,21 @@ class CallHandler:
     def _ask_for(self, slot_name: str, attempt: int = 1) -> str:
         prompts = self.ASK_PROMPTS[slot_name]
         return prompts[min(attempt, len(prompts)) - 1]
+
+    def _ask_time_on(self, day: Any, attempt: int = 1) -> str:
+        """Ask for the hour on a day we already have.
+
+        Naming the day matters. "What day and time would suit you?" asked
+        after the caller has just said "Saturday morning" reads as though we
+        were not listening, and invites them to repeat the day rather than
+        supply the missing half.
+        """
+        label = f"{day:%A %d %B}"
+        return (
+            f"What time on {label} would suit you?",
+            f"We're open from 9 in the morning until 8. What time on {label} works?",
+            f"Could you give me a time on {label} - for example, 10:30?",
+        )[min(attempt, 3) - 1]
 
     # ------------------------------------------------------------------
     def _book(self, session: CallSession, now: datetime) -> str:
