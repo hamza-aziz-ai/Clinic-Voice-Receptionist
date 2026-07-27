@@ -6,23 +6,34 @@ from receptionist.config import settings
 
 client = TestClient(app)
 
-BOOKED_CALL = (
-    "assistant: Thank you for calling.\n"
-    "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm\n"
-    "assistant: I have your name as Priya Menon. Did I get that right?\n"
-    "user: yes that's right\n"
-    "user: my number is 0501234567\n"
-    "assistant: Is that correct?\n"
-    "user: yes correct\n"
-    "assistant: Shall I book that?\n"
-    "user: yes please\n"
-)
+def booked_call(at: str) -> str:
+    """A call that reaches a booking, at a stated time.
+
+    Each test picks its own time: the app object is module-level, so tests
+    share one calendar, and two chairs means the third test asking for the
+    same slot would be legitimately refused.
+    """
+    return (
+        "assistant: Thank you for calling.\n"
+        f"user: my name is Priya Menon I need a cleaning tomorrow at {at}\n"
+        "assistant: I have your name as Priya Menon. Did I get that right?\n"
+        "user: yes that's right\n"
+        "user: my number is 0501234567\n"
+        "assistant: Is that correct?\n"
+        "user: yes correct\n"
+        "assistant: Shall I book that?\n"
+        "user: yes please\n"
+    )
 
 
-def execution(transcript: str = BOOKED_CALL, **over) -> dict:
+def execution(transcript: str, **over) -> dict:
+    # created_at is pinned so "tomorrow" always resolves to a Tuesday. Left
+    # to the real clock, the whole file fails every Thursday, when tomorrow
+    # is the Friday the clinic is closed.
     body = {
         "id": "exec-api-1", "agent_id": "agent-1", "status": "completed",
         "transcript": transcript,
+        "created_at": "2026-07-27T06:00:00Z",       # 10:00 Monday, UTC+4
         "telephony_data": {"from_number": "+971501234567", "call_type": "inbound"},
     }
     body.update(over)
@@ -65,13 +76,13 @@ def test_evaluation_endpoint_reports_zero_silent_errors():
 def test_webhook_rejects_unconfigured_deployment(monkeypatch):
     """No secret set must not mean no check."""
     monkeypatch.setattr(settings, "bolna_webhook_secret", "")
-    r = client.post("/webhooks/bolna", json=execution())
+    r = client.post("/webhooks/bolna", json=execution(booked_call("3 pm")))
     assert r.status_code == 403
     assert "no webhook secret configured" in r.json()["detail"]
 
 
 def test_webhook_rejects_wrong_secret(webhook_open):
-    r = client.post("/webhooks/bolna", json=execution(),
+    r = client.post("/webhooks/bolna", json=execution(booked_call("3 pm")),
                     headers={"X-Webhook-Secret": "wrong"})
     assert r.status_code == 403
 
@@ -79,13 +90,14 @@ def test_webhook_rejects_wrong_secret(webhook_open):
 def test_webhook_rejects_unlisted_source(monkeypatch):
     monkeypatch.setattr(settings, "bolna_webhook_secret", "s3cret")
     monkeypatch.setattr(settings, "bolna_extra_source_ips", ())
-    r = client.post("/webhooks/bolna", json=execution(),
+    r = client.post("/webhooks/bolna", json=execution(booked_call("3 pm")),
                     headers={"X-Webhook-Secret": "s3cret"})
     assert r.status_code == 403
 
 
 def test_webhook_books_and_queues_whatsapp(webhook_open):
-    body = client.post("/webhooks/bolna", json=execution(id="exec-books"),
+    body = client.post("/webhooks/bolna",
+                       json=execution(booked_call("3 pm"), id="exec-books"),
                        headers=webhook_open).json()
     assert body["outcome"] == "booked"
     assert body["booking_id"]
@@ -113,11 +125,32 @@ def test_webhook_declines_to_book_without_confirmation(webhook_open):
 
 def test_webhook_redelivery_is_a_200_not_a_duplicate(webhook_open):
     """Bolna retries on non-2xx; a declined call is not a delivery failure."""
-    payload = execution(id="exec-retry")
+    payload = execution(booked_call("4 pm"), id="exec-retry")
     first = client.post("/webhooks/bolna", json=payload, headers=webhook_open)
     second = client.post("/webhooks/bolna", json=payload, headers=webhook_open)
     assert first.status_code == second.status_code == 200
+    assert first.json()["outcome"] == "booked"
     assert first.json()["booking_id"] == second.json()["booking_id"]
+
+
+def test_dispatch_sends_the_reminder_only_once_it_is_due(webhook_open):
+    body = client.post("/webhooks/bolna",
+                       json=execution(booked_call("5 pm"), id="exec-dispatch"),
+                       headers=webhook_open).json()
+    assert body["outcome"] == "booked"
+
+    queued = [m for m in client.get("/messages").json()
+              if m["booking_id"] == body["booking_id"]]
+    reminder = next(m for m in queued if m["template"] == "appointment_reminder")
+
+    # Nothing due yet: the confirmation already went out during the call.
+    early = client.post("/messages/dispatch", params={"now": "2026-07-01T00:00:00"}).json()
+    assert early["sent"] == 0
+
+    due = client.post("/messages/dispatch",
+                      params={"now": reminder["send_after"]}).json()
+    assert due["sent"] >= 1
+    assert any("appointment_reminder" in label for label in due["detail"]["sent"])
 
 
 def test_console_is_served():

@@ -24,7 +24,12 @@ class OutboundMessage:
     parameters: dict[str, str]
     send_after: datetime | None = None
     booking_id: str | None = None
-    status: Literal["queued", "sent", "failed", "cancelled"] = "queued"
+    # "expired" is distinct from "cancelled": the booking was fine, the send
+    # window simply passed. A reminder that arrives after the appointment is
+    # worse than no reminder, so it is dropped rather than sent late, and it
+    # is recorded separately because a rising expired count means the
+    # dispatcher is not running often enough.
+    status: Literal["queued", "sent", "failed", "cancelled", "expired"] = "queued"
     result: dict[str, Any] | None = None
 
     def render(self) -> str:

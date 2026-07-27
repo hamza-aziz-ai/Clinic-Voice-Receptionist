@@ -149,6 +149,40 @@ def test_unparseable_timestamp_does_not_sink_the_payload():
     assert ex.created_at is None
 
 
+def test_utc_timestamp_becomes_clinic_local_wall_time():
+    """21:00 in Dubai is 17:00Z. Left in UTC it is still the same day, but
+    a 23:00 call would resolve 'tomorrow' a day early."""
+    ex = parse_execution(payload("user: hello", created_at="2026-07-27T17:00:00Z"),
+                         clinic_utc_offset_hours=4)
+    assert ex.created_at == datetime(2026, 7, 27, 21, 0)
+
+
+def test_an_already_local_offset_is_not_double_counted():
+    ex = parse_execution(payload("user: hello", created_at="2026-07-27T21:00:00+04:00"),
+                         clinic_utc_offset_hours=4)
+    assert ex.created_at == datetime(2026, 7, 27, 21, 0)
+
+
+def test_call_time_is_the_reference_for_relative_dates():
+    """A retry landing the next morning must not shift the appointment."""
+    handler = make_handler()
+    transcript = (
+        "assistant: Hi.\n"
+        "user: my name is Priya Menon a cleaning tomorrow at 3 pm\n"
+        "assistant: I have your name as Priya Menon. Did I get that right?\n"
+        "user: yes that's right\n"
+        "user: my number is 0501234567\n"
+        "assistant: Is that correct?\n"
+        "user: yes correct\n"
+        "assistant: Shall I book that?\n"
+        "user: yes please\n"
+    )
+    ex = parse_execution(payload(transcript, created_at="2026-07-27T06:00:00Z"))
+    result = ingest_execution(ex, handler)          # no explicit now
+    assert result.outcome == "booked", result.reason
+    assert handler.calendar.get(result.booking_id).start == datetime(2026, 7, 28, 15, 0)
+
+
 # ---------------------------------------------------------------- ingest
 def test_incomplete_call_is_not_actionable():
     for status in ("queued", "ringing", "busy", "failed", "no-answer"):

@@ -43,6 +43,11 @@ class Settings:
         )
     )
 
+    # Clinic wall-clock offset from UTC. Bolna timestamps arrive UTC and
+    # "tomorrow at 3pm" is meant in the clinic's local time; +4 is UAE.
+    clinic_utc_offset_hours: float = field(
+        default_factory=lambda: float(os.environ.get("CLINIC_UTC_OFFSET_HOURS", "4"))
+    )
     clinic_name: str = field(
         default_factory=lambda: os.environ.get("CLINIC_NAME", "Al Noor Dental")
     )

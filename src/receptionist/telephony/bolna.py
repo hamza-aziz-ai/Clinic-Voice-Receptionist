@@ -33,7 +33,7 @@ from __future__ import annotations
 import hmac
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 # Documented egress address for Bolna webhook deliveries. Kept as data
@@ -193,11 +193,41 @@ def verify_source(
         raise BolnaWebhookError("webhook secret mismatch")
 
 
-def parse_execution(payload: dict[str, Any]) -> BolnaExecution:
+def _clinic_local(raw: Any, offset_hours: float) -> datetime | None:
+    """ISO-8601 timestamp to naive clinic-local time, or None if unusable.
+
+    An unparseable timestamp yields None rather than raising. The caller
+    falls back to the current time, which is a slightly worse reference for
+    relative dates - not a reason to drop a call that otherwise booked.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    # Normalise to UTC first: the payload may carry any offset, and adding
+    # the clinic offset to an already-local timestamp double-counts it.
+    utc = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return utc + timedelta(hours=offset_hours)
+
+
+def parse_execution(
+    payload: dict[str, Any],
+    clinic_utc_offset_hours: float = 4.0,
+) -> BolnaExecution:
     """Map the webhook body onto the fields this system uses.
 
     Every Bolna-specific field name is read here and nowhere else, so a
     change to their payload is a single-file edit rather than a hunt.
+
+    ``created_at`` arrives UTC and is converted to clinic-local wall time,
+    naive, because that is what the rest of the system works in and what
+    "tomorrow at 3pm" means to a caller. Keeping it UTC would resolve a
+    21:00 Dubai call to the following day in the extractor, silently booking
+    everyone who rings after 20:00 a day late.
     """
     if not isinstance(payload, dict):
         raise BolnaWebhookError("payload is not a JSON object")
@@ -210,13 +240,7 @@ def parse_execution(payload: dict[str, Any]) -> BolnaExecution:
     if not isinstance(telephony, dict):
         telephony = {}
 
-    created_raw = payload.get("created_at")
-    created: datetime | None = None
-    if isinstance(created_raw, str) and created_raw:
-        try:
-            created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-        except ValueError:
-            created = None
+    created = _clinic_local(payload.get("created_at"), clinic_utc_offset_hours)
 
     return BolnaExecution(
         execution_id=str(execution_id),

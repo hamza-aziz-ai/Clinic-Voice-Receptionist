@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..evaluation.corpus import CASES, REFERENCE
 from ..evaluation.harness import evaluate
-from ..messaging.base import MockWhatsApp, render_template
+from ..messaging.aisensy import AiSensyConnector, MockAiSensy
+from ..messaging.base import OutboundMessage, render_template
+from ..messaging.dispatch import dispatch_due
 from ..nlu.language import LANGUAGE_NAMES
 from ..scheduling.calendar import Calendar, ClinicHours
 from ..telephony.bolna import BolnaWebhookError, parse_execution, verify_source
@@ -36,7 +38,14 @@ app = FastAPI(
 )
 
 calendar = Calendar(hours=ClinicHours(), chairs=2)
-messaging = MockWhatsApp()
+# The mock builds the same AiSensy request body the live connector posts, so
+# a parameter-order or missing-campaign mistake fails here and in the demo,
+# not only against a real account nobody running this repository has.
+messaging = (
+    AiSensyConnector(settings.aisensy_api_key, settings.aisensy_base_url)
+    if settings.aisensy_api_key
+    else MockAiSensy()
+)
 handler = CallHandler(
     calendar, messaging,
     clinic_name=settings.clinic_name, review_link=settings.review_link,
@@ -147,7 +156,9 @@ async def bolna_webhook(
             expected_secret=settings.bolna_webhook_secret,
             allowed_ips=settings.bolna_allowed_ips,
         )
-        execution = parse_execution(await request.json())
+        execution = parse_execution(
+            await request.json(), settings.clinic_utc_offset_hours
+        )
     except BolnaWebhookError as exc:
         raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:                       # malformed JSON body
@@ -157,6 +168,22 @@ async def bolna_webhook(
     if result.session is not None:
         SESSIONS[result.session.call_id] = result.session
     return result.to_dict()
+
+
+def _all_messages() -> list[OutboundMessage]:
+    return [m for s in SESSIONS.values() for m in s.messages]
+
+
+@app.post("/messages/dispatch")
+def dispatch(now: datetime | None = None) -> dict[str, Any]:
+    """Run one pass over the scheduled queue.
+
+    Exposed as an endpoint rather than run on a background thread so the
+    scheduler is something you can point at, trigger and observe. n8n's Cron
+    node calls this; the console has a button for it; the tests call it with
+    an explicit ``now`` instead of waiting a day for a reminder to come due.
+    """
+    return dispatch_due(_all_messages(), messaging, calendar, now).to_dict()
 
 
 @app.get("/evaluation")

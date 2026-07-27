@@ -67,8 +67,18 @@ def ingest_execution(
     handler: CallHandler,
     now: datetime | None = None,
 ) -> IngestResult:
-    """Replay a completed execution through the booking gate."""
-    now = now or datetime.now()
+    """Replay a completed execution through the booking gate.
+
+    Relative dates resolve against when the *call* happened, not when the
+    webhook was processed. Bolna redelivers on failure, and a retry that
+    lands after midnight would otherwise read "tomorrow at 3pm" as the day
+    after the one the caller meant - a wrong booking produced by a retry
+    that was supposed to be a no-op.
+
+    An explicit ``now`` still wins, so replay tooling and tests can pin the
+    reference without having to forge a timestamp into the payload.
+    """
+    now = now or execution.created_at or datetime.now()
 
     if not execution.completed:
         # A ringing, busy or failed call carries no caller intent. Acting on

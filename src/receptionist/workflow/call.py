@@ -314,8 +314,17 @@ class CallHandler:
             )
             session.messages.append(msg)
             if when is None:                       # immediate
-                msg.result = self.messaging.send(msg)
-                msg.status = "sent"
+                try:
+                    msg.result = self.messaging.send(msg)
+                    msg.status = "sent"
+                except Exception as exc:
+                    # The chair is already reserved. A WhatsApp failure must
+                    # not unwind the booking or raise out of the call flow -
+                    # that would tell a caller "no" after telling them "yes",
+                    # and lose an appointment the clinic is holding. Record it
+                    # and let the dispatcher's failure count surface it.
+                    msg.status = "failed"
+                    msg.result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     def _escalate(self, session: CallSession, reason: str) -> str:
         session.state = "escalated"
