@@ -92,4 +92,21 @@ CASES: list[TestCase] = [
          "appointment_time": datetime(2026, 7, 28, 10, 0)},
         note="'double nine' multiplier expansion",
     ),
+    TestCase(
+        "en-06", "en",
+        "Hi, my name is Hamza Aziz. I think my wisdom tooth is not coming up "
+        "properly and its aching my left side of the jaw down to the neck. "
+        "Saturday morning works, my number is plus nine one eight four four "
+        "seven six four four one eight eight",
+        {"patient_name": "Hamza Aziz", "procedure": "checkup",
+         "phone": "+918447644188"},
+        note=(
+            "verbatim from a real session. The caller describes a symptom and "
+            "never names a procedure - the corpus had no such case, so the "
+            "agent asked 'what would you like to come in for?' four times. "
+            "Expected checkup, never extraction: a phone description is not a "
+            "clinical decision, and the slot must stay below threshold so it "
+            "is read back rather than booked"
+        ),
+    ),
 ]

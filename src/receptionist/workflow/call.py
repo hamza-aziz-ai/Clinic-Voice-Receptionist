@@ -31,6 +31,35 @@ CallState = Literal[
 MAX_READBACK_FAILURES = 2
 MAX_COLLECT_TURNS = 8
 
+# How many times one slot may be asked for before handing off. Repeating an
+# identical question is the failure mode this exists to stop: a real call went
+#
+#   agent : What would you like to come in for?
+#   caller: Are you asking about the procedure?
+#   agent : What would you like to come in for?
+#   caller: I don't understand what you are trying to ask.
+#   agent : What would you like to come in for?
+#
+# A caller who did not understand a sentence will not understand the same
+# sentence. Each attempt is worded differently and the third hands to a human.
+MAX_ASKS_PER_SLOT = 3
+
+# The caller telling us the agent is not making sense. Worth detecting
+# explicitly: the reply is otherwise indistinguishable from silence, and the
+# agent answers it by repeating itself, which is what made the loop above feel
+# like talking to a wall.
+CONFUSION_MARKERS = (
+    "don't understand", "dont understand", "do not understand",
+    "what do you mean", "are you asking", "not sure what you",
+    "come again", "say that again", "repeat that", "didn't catch",
+    "didnt catch", "makes no sense", "confused",
+)
+
+
+def sounds_confused(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in CONFUSION_MARKERS)
+
 
 @dataclass
 class Turn:
@@ -54,6 +83,9 @@ class CallSession:
     escalation_reason: str | None = None
     readback_failures: int = 0
     collect_turns: int = 0
+    # How many times each slot has been asked for. Drives the rewording and
+    # the hand-off, so the agent cannot ask the same question indefinitely.
+    asks: dict[str, int] = field(default_factory=dict)
     messages: list[OutboundMessage] = field(default_factory=list)
     # Upper bound on any slot's confidence for this call. 1.0 means the
     # transcript is the only evidence. A replayed Bolna execution sets this
@@ -205,7 +237,22 @@ class CallHandler:
 
         missing = session.slots.missing
         if missing:
-            return session.say(self._ask_for(missing[0].name), f"missing {missing[0].name}")
+            name = missing[0].name
+            session.asks[name] = session.asks.get(name, 0) + 1
+            attempt = session.asks[name]
+
+            if attempt > MAX_ASKS_PER_SLOT:
+                # Asking a fourth time is not going to work, and the caller
+                # has already told us twice that the question is unclear.
+                return self._escalate(
+                    session,
+                    f"could not capture {name} after {MAX_ASKS_PER_SLOT} attempts",
+                )
+
+            prompt = self._ask_for(name, attempt)
+            if attempt > 1 and sounds_confused(text):
+                prompt = f"Sorry, let me put that differently. {prompt}"
+            return session.say(prompt, f"missing {name} (attempt {attempt})")
 
         return self._book(session, now)
 
@@ -236,7 +283,14 @@ class CallHandler:
             if session.readback_failures > MAX_READBACK_FAILURES:
                 return self._escalate(session, "repeated failure to confirm details")
             session.state = "collect"
-            return session.say(self._ask_for(slot.name), "read-back rejected, re-asking")
+            # A rejected read-back counts as an ask, so the re-ask is worded
+            # differently. Repeating the question the caller just corrected is
+            # how a call turns into a loop.
+            session.asks[slot.name] = session.asks.get(slot.name, 0) + 1
+            return session.say(
+                self._ask_for(slot.name, session.asks[slot.name]),
+                "read-back rejected, re-asking",
+            )
 
         # Ambiguous answer to a yes/no question - do not treat silence as yes.
         session.readback_failures += 1
@@ -294,13 +348,37 @@ class CallHandler:
                     f"capped at {session.confidence_ceiling:.2f} by call audio quality"
                 )
 
-    def _ask_for(self, slot_name: str) -> str:
-        return {
-            "patient_name": "Could I take your full name please?",
-            "phone": "What is the best mobile number to reach you on?",
-            "appointment_time": "What day and time would suit you?",
-            "procedure": "What would you like to come in for?",
-        }[slot_name]
+    # Each slot gets three different wordings, not one repeated three times.
+    # The second offers examples, because a caller who did not understand an
+    # open question usually can answer a closed one - "are you booking a
+    # check-up, a cleaning, or is something hurting?" is answerable even by
+    # someone who has no idea what we meant by "come in for".
+    ASK_PROMPTS: dict[str, tuple[str, str, str]] = {
+        "patient_name": (
+            "Could I take your full name please?",
+            "Could you give me your first and last name?",
+            "I just need a name for the booking - first name is fine.",
+        ),
+        "phone": (
+            "What is the best mobile number to reach you on?",
+            "Could you give me a mobile number, starting with the country code?",
+            "I still need a contact number - could you read it out digit by digit?",
+        ),
+        "appointment_time": (
+            "What day and time would suit you?",
+            "Which day works for you, and roughly what time?",
+            "Could you give me a day and a time - for example, Tuesday at 3 pm?",
+        ),
+        "procedure": (
+            "What would you like to come in for?",
+            "Are you booking a check-up or a cleaning, or is something hurting?",
+            "Is this a routine visit, or is there a problem you want looked at?",
+        ),
+    }
+
+    def _ask_for(self, slot_name: str, attempt: int = 1) -> str:
+        prompts = self.ASK_PROMPTS[slot_name]
+        return prompts[min(attempt, len(prompts)) - 1]
 
     # ------------------------------------------------------------------
     def _book(self, session: CallSession, now: datetime) -> str:

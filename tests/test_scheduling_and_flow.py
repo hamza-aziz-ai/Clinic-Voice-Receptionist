@@ -148,3 +148,102 @@ class TestCallFlow:
             h.handle_utterance(s, text, NOW)
         assert s.booking_id
         assert all(m.language == "ml" for m in s.messages)
+
+
+# ---------------------------------------------------------------- real call
+# Every test below comes from one transcript of an actual session with the
+# console, where the agent asked "What would you like to come in for?" four
+# times in a row at a caller who twice said they did not understand.
+NOW_REAL = datetime(2026, 7, 27, 10, 0)
+
+
+def _handler():
+    from receptionist.messaging.base import MockWhatsApp
+    return CallHandler(Calendar(hours=ClinicHours(), chairs=2), MockWhatsApp())
+
+
+def _run(handler, session, turns):
+    return [handler.handle_utterance(session, t, NOW_REAL) for t in turns]
+
+
+def test_a_described_symptom_is_understood_as_a_checkup():
+    """Callers describe what hurts; they do not name procedures."""
+    from receptionist.nlu.slots import extract_slots
+    slots = extract_slots(
+        "I think my wisdom tooth is not coming up properly and its aching "
+        "my left side of the jaw down to the neck.", NOW_REAL)
+    assert slots.procedure.value == "checkup"
+    assert slots.procedure.source == "symptom"
+
+
+def test_a_symptom_never_infers_a_treatment():
+    """No amount of keyword matching distinguishes a wisdom tooth that needs
+    removing from one that needs an X-ray. Booking an extraction off "aching"
+    would be the system inventing a clinical decision from a phone call."""
+    from receptionist.nlu.slots import SYMPTOM_TERMS, extract_slots
+    for term in SYMPTOM_TERMS:
+        slots = extract_slots(f"my tooth is {term} a lot", NOW_REAL)
+        assert slots.procedure.value in (None, "checkup"), term
+
+
+def test_an_inferred_procedure_is_always_read_back():
+    """The caller said what hurts. They did not say what appointment they
+    wanted, so it cannot book without being asked."""
+    from receptionist.nlu.slots import extract_slots
+    slots = extract_slots("my wisdom tooth is aching", NOW_REAL)
+    assert slots.procedure.needs_confirmation
+    assert not slots.procedure.usable
+
+
+def test_the_readback_for_an_inferred_procedure_does_not_put_words_in_their_mouth():
+    from receptionist.nlu.slots import extract_slots, readback_prompt
+    slots = extract_slots("my wisdom tooth is aching", NOW_REAL)
+    prompt = readback_prompt(slots.procedure)
+    assert "take a look" in prompt and "check-up" in prompt
+    assert "You'd like" not in prompt
+
+
+def test_a_phone_number_is_read_back_in_groups():
+    """Twelve digits in one run are unverifiable by ear, so the caller says
+    yes because they lost track - the read-back becomes theatre."""
+    from receptionist.nlu.slots import spoken_number
+    assert spoken_number("+918447644188") == "plus 91 844 764 4188"
+    assert spoken_number("+971501234567") == "plus 971 501 234 567"
+
+
+def test_the_same_question_is_never_asked_twice():
+    handler = _handler()
+    session = handler.start("+918447644188")
+    replies = _run(handler, session, [
+        "Hi, my name is Hamza Aziz.", "+91 8447644188", "Yes, that is correct.",
+        "Saturday morning works fine for me", "Yes please",
+        "Are you asking about the procedure?",
+        "I don't understand what you are trying to ask.",
+    ])
+    asks = [r for r in replies if "?" in r]
+    assert len(asks) == len(set(asks)), f"a question was repeated verbatim: {asks}"
+
+
+def test_confusion_is_acknowledged_rather_than_answered_with_a_repeat():
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Hamza Aziz", "0501234567", "yes",
+                            "Saturday morning", "yes"])
+    reply = handler.handle_utterance(
+        session, "I don't understand what you are trying to ask.", NOW_REAL)
+    assert reply.startswith("Sorry, let me put that differently")
+
+
+def test_a_slot_that_keeps_failing_reaches_a_human():
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, [
+        "Hi, my name is Hamza Aziz.", "+91 8447644188", "Yes, that is correct.",
+        "Saturday morning works fine for me", "Yes please",
+        "Are you asking about the procedure?",
+        "I don't understand what you are trying to ask.",
+        "Sorry, still not sure what you mean.",
+    ])
+    assert session.state == "escalated"
+    assert "procedure" in session.escalation_reason
+    assert handler.calendar.active() == []

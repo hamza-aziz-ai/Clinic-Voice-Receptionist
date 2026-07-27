@@ -202,6 +202,13 @@ CLINICAL_BOUNDARY = {
     "checkup", "check", "up", "consultation", "look", "examine", "pain",
     "whitening", "bleaching", "whiten",
     "braces", "aligner", "orthodontic", "invisalign",
+    # Symptom words too - callers say "my name is Sara Ali wisdom tooth
+    # aching", and a name that swallows the symptom is the same bug as a name
+    # that swallows the procedure. Kept in sync by the same test.
+    "aching", "ache", "aches", "hurts", "hurting", "sore", "throbbing",
+    "swollen", "swelling", "bleeding", "sensitive", "sensitivity",
+    "wisdom", "tooth", "teeth", "abscess", "infected", "infection",
+    "broken", "chipped", "cracked", "loose", "stuck", "toothache",
 }
 NAME_BOUNDARY |= CLINICAL_BOUNDARY
 

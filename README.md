@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 187 passed
+$ python -m pytest -q          # 197 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -81,9 +81,9 @@ exhaustive and runs on every commit.
 | Simulated ASR error | Slot accuracy | Language accuracy | Caught by read-back | **Silent errors** |
 |---:|---:|---:|---:|---:|
 | 0% | 100.0% | 100.0% | 0 | **0** |
-| 15% | 83.8% | 100.0% | 6 | **0** |
-| 30% | 75.7% | 100.0% | 9 | **0** |
-| 50% | 75.7% | 100.0% | 9 | **0** |
+| 15% | 82.5% | 100.0% | 7 | **0** |
+| 30% | 75.0% | 100.0% | 10 | **0** |
+| 50% | 75.0% | 100.0% | 10 | **0** |
 
 A **silent error** is a wrong value that was *not* flagged for read-back. It
 is the only kind that reaches a patient, and it's the number the system is
@@ -408,8 +408,11 @@ the real request body, so an ordering mistake fails offline.
 - **The Bolna agent prompt is not here.** Making the read-backs happen during
   the call is a prompt-engineering job on Bolna's side. This repository assumes
   they happened and verifies it from the transcript; it cannot make them happen.
-- **The corpus is 10 utterances.** Enough to catch the bugs above; not enough
-  to make a claim about production accuracy.
+- **The corpus is 11 utterances.** Enough to catch the bugs above; not enough
+  to make a claim about production accuracy. Its thinness is not theoretical:
+  every case happened to name a procedure outright, so a caller who described
+  a symptom instead was met with the same question four times over. That
+  transcript is now case `en-06`.
 - **No auth, no persistence.** Sessions are in memory.
 - **Slot extraction is rule-based.** For a closed schema with four fields,
   rules are inspectable, testable and free — and confidence means something

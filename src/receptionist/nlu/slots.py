@@ -61,6 +61,32 @@ PROCEDURE_DURATION_MIN: dict[str, int] = {
     "filling": 45, "checkup": 20, "whitening": 60, "braces": 45,
 }
 
+# How callers actually answer "what would you like to come in for?". They do
+# not name procedures - they describe what hurts. A real transcript:
+#
+#   "I think my wisdom tooth is not coming up properly and its aching my left
+#    side of the jaw down to the neck."
+#
+# matched nothing, and the agent asked the same question four more times.
+#
+# Every one of these maps to CHECKUP and never to a treatment. A caller
+# describing symptoms has not consented to an extraction, and no amount of
+# keyword matching can distinguish a wisdom tooth that needs removing from
+# one that needs an X-ray. Booking 45 minutes for an extraction off "aching"
+# would be the system inventing a clinical decision from a phone call.
+SYMPTOM_TERMS: tuple[str, ...] = (
+    "aching", "ache", "aches", "hurts", "hurting", "sore", "throbbing",
+    "swollen", "swelling", "bleeding", "sensitive", "sensitivity",
+    "wisdom tooth", "wisdom teeth", "abscess", "infected", "infection",
+    "broken", "chipped", "cracked", "loose", "stuck", "toothache",
+)
+
+# Confidence multiplier for a procedure inferred from a symptom rather than
+# named. Chosen to land the slot below the 0.70 threshold, so it is always
+# read back as "shall I book you a check-up" rather than silently booked.
+# The caller said what hurts; they did not say what appointment they wanted.
+SYMPTOM_CONFIDENCE_FACTOR = 0.75
+
 
 @dataclass
 class Slot:
@@ -229,18 +255,34 @@ def extract_slots(
     # -- procedure ---------------------------------------------------------
     if not slots.procedure.confirmed:
         lowered = transcript.lower()
+        named = None
         for code, keywords in PROCEDURES.items():
             hit = next((k for k in keywords if k in lowered), None)
             if hit:
-                conf = _asr_confidence(word_confidences, hit)
-                # Closed vocabulary: a near-miss still lands on a valid value,
-                # so this is the most reliable slot on the call.
-                slots.procedure = Slot(
-                    "procedure", raw_text=hit, value=code,
-                    confidence=max(0.0, min(1.0, conf)), source="asr",
-                    notes=[f"matched keyword {hit!r}"],
-                )
+                named = (code, hit)
                 break
+
+        if named:
+            code, hit = named
+            conf = _asr_confidence(word_confidences, hit)
+            # Closed vocabulary: a near-miss still lands on a valid value,
+            # so this is the most reliable slot on the call.
+            slots.procedure = Slot(
+                "procedure", raw_text=hit, value=code,
+                confidence=max(0.0, min(1.0, conf)), source="asr",
+                notes=[f"matched keyword {hit!r}"],
+            )
+        else:
+            symptom = next((s for s in SYMPTOM_TERMS if s in lowered), None)
+            if symptom:
+                # Inferred, not stated. Deliberately scored below threshold so
+                # it is read back before anything is booked.
+                conf = _asr_confidence(word_confidences, symptom) * SYMPTOM_CONFIDENCE_FACTOR
+                slots.procedure = Slot(
+                    "procedure", raw_text=symptom, value="checkup",
+                    confidence=max(0.0, min(1.0, conf)), source="symptom",
+                    notes=[f"inferred from symptom {symptom!r}; not stated by caller"],
+                )
 
     return slots
 
@@ -253,8 +295,7 @@ def readback_prompt(slot: Slot, language: str = "en") -> str:
     hold four values in mind and check each one.
     """
     if slot.name == "phone":
-        digits = " ".join(str(slot.value).replace("+", ""))
-        return f"Let me confirm your number: {digits}. Is that correct?"
+        return f"Let me confirm your number: {spoken_number(slot.value)}. Is that correct?"
     if slot.name == "appointment_time":
         return (
             f"That's {slot.value:%A %d %B} at {slot.value:%I:%M %p}. "
@@ -262,4 +303,40 @@ def readback_prompt(slot: Slot, language: str = "en") -> str:
         )
     if slot.name == "patient_name":
         return f"I have your name as {slot.value}. Did I get that right?"
+    if slot.source == "symptom":
+        # Never read an inferred procedure back as though the caller chose it.
+        # "You'd like a checkup" invites a yes to something they never said,
+        # and a yes here is what books the appointment.
+        return (
+            "It sounds like you need someone to take a look at that. "
+            "Shall I book you in for a check-up?"
+        )
     return f"You'd like a {str(slot.value).replace('_', ' ')}. Is that right?"
+
+
+def spoken_number(e164: str) -> str:
+    """Group a number so a caller can actually check it.
+
+    Read as one run - "9 1 8 4 4 7 6 4 4 1 8 8" - twelve digits are
+    unverifiable by ear, which makes the read-back theatre: the caller says
+    yes because they lost track, not because it was right. Grouping is the
+    difference between confirming and appearing to confirm.
+    """
+    digits = str(e164 or "").lstrip("+")
+    if not digits:
+        return ""
+
+    country, rest = "", digits
+    for code in ("971", "91"):
+        if digits.startswith(code):
+            country, rest = code, digits[len(code):]
+            break
+
+    groups: list[str] = []
+    while len(rest) > 4:
+        groups.append(rest[:3])
+        rest = rest[3:]
+    if rest:
+        groups.append(rest)
+
+    return " ".join(([f"plus {country}"] if country else []) + groups)
