@@ -85,6 +85,23 @@ class Settings:
             "ASR_ENABLED", ""
         ).strip().lower() in ("1", "true", "yes")
     )
+    # Browser push-to-talk: local Whisper in, local Piper out. Off by default
+    # because it needs model files on disk and a GPU to be conversational.
+    voice_enabled: bool = field(
+        default_factory=lambda: os.environ.get(
+            "VOICE_ENABLED", ""
+        ).strip().lower() in ("1", "true", "yes")
+    )
+    whisper_model: str = field(
+        default_factory=lambda: os.environ.get("WHISPER_MODEL", "small")
+    )
+    whisper_device: str = field(
+        default_factory=lambda: os.environ.get("WHISPER_DEVICE", "cuda")
+    )
+    piper_voice_dir: str = field(
+        default_factory=lambda: os.environ.get("PIPER_VOICE_DIR", "models/piper")
+    )
+
     asr_model: str = field(
         default_factory=lambda: os.environ.get(
             "ASR_MODEL", "ai4bharat/indic-conformer-600m-multilingual"

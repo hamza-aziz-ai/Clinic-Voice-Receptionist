@@ -171,6 +171,83 @@ $("call-form").addEventListener("submit", async (e) => {
   live(`Agent replied. Call state: ${result.state.replace(/_/g, " ")}.`);
 });
 
+/* ---------------- push to talk ----------------
+   Hold to record, release to send. Not continuous listening: deciding when a
+   caller has stopped speaking is its own hard problem, and doing it badly
+   makes the whole system feel broken for reasons unrelated to whether the
+   booking logic is right. The button sidesteps it rather than half-solving it.
+
+   Only the caller is ever recorded - the agent's reply plays through the
+   speaker and never enters the microphone stream. That is what makes this
+   mono capture safe to score confidence against. */
+let recorder = null, chunks = [];
+
+async function startRecording() {
+  if (recorder) return;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => stream.getTracks().forEach((t) => t.stop());
+  recorder.start();
+  $("talk").textContent = "● Recording — release to send";
+  live("Recording. Release the button to send.");
+}
+
+async function stopRecording() {
+  if (!recorder) return;
+  const done = new Promise((r) => recorder.addEventListener("stop", r, { once: true }));
+  recorder.stop();
+  await done;
+  recorder = null;
+  $("talk").textContent = "🎤 Hold to talk";
+  if (!chunks.length) return;
+
+  if (!callId) await startCall();
+  live("Transcribing…");
+  const form = new FormData();
+  form.append("audio", new Blob(chunks, { type: "audio/webm" }), "turn.webm");
+
+  let result;
+  try {
+    const res = await fetch(`/calls/${callId}/audio`, { method: "POST", body: form });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    result = await res.json();
+  } catch (err) {
+    live(`Voice failed: ${err.message}. Is the server running with VOICE_ENABLED=1?`);
+    return;
+  }
+
+  renderTranscript(result); renderSlots(result);
+  await Promise.all([refreshBookings(), refreshMessages()]);
+
+  if (result.audio) {
+    // Played, not autoplayed on load - this follows a user gesture, so the
+    // browser allows it.
+    new Audio(`data:audio/wav;base64,${result.audio}`).play().catch(() => {});
+  }
+  live(
+    `Heard: "${result.heard}". Agent replied${result.audio ? " aloud" : " in text only"}.`
+  );
+}
+
+const talk = $("talk");
+talk.addEventListener("mousedown", startRecording);
+talk.addEventListener("mouseup", stopRecording);
+talk.addEventListener("mouseleave", () => { if (recorder) stopRecording(); });
+talk.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); });
+talk.addEventListener("touchend", (e) => { e.preventDefault(); stopRecording(); });
+// Keyboard equivalent: a hold gesture that only works with a mouse is not a
+// control, it is an obstacle.
+talk.addEventListener("keydown", (e) => {
+  if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); startRecording(); }
+});
+talk.addEventListener("keyup", (e) => {
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); stopRecording(); }
+});
+
 $("new-call").addEventListener("click", async () => { callId = null; await startCall(); });
 $("dispatch").addEventListener("click", runDispatch);
 document.querySelectorAll(".chip").forEach((c) =>

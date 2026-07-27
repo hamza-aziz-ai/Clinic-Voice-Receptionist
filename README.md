@@ -6,9 +6,39 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 239 passed
+$ python -m pytest -q          # 250 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
+
+**It talks.** Hold the button in the console, speak, release — local Whisper
+on the GPU, local Piper back out, no paid service anywhere:
+
+```
+spoken : Hello my name is Priya Menon I need a cleaning tomorrow at three pm
+heard  : Hello my name is Priya Menon I need a cleaning tomorrow at 3pm.
+agent  : What is the best mobile number to reach you on?
+
+spoken : my number is zero five zero one two three four five six seven
+agent  : Let me confirm your number: plus 971 501 234 567. Is that correct?
+
+spoken : yes that is correct
+agent  : You're booked for a cleaning on Wednesday 29 July at 03:00 PM.
+```
+
+**0.8–1.0 s per turn** on an RTX 4050 after a 7 s cold start — Whisper small
+transcribes 6.9 s of audio in 0.28 s (RTF 0.04) and Piper synthesises at
+RTF 0.05. On CPU this is seconds per turn and stops being a conversation.
+
+```bash
+python scripts/setup_voice.py
+VOICE_ENABLED=1 uvicorn receptionist.api.main:app --app-dir src
+```
+
+Two limits worth stating up front. **There is no phone number** — the caller
+speaks through a browser, because a dialable number cannot be free. And
+**Tamil and Kannada have no free voice model**: Piper has none, so the agent
+answers in text for those two rather than reading their script with an
+English voice, which produces noise rather than an accent.
 
 Built against a published brief: **Bolna AI** for the inbound voice agent,
 **AiSensy** for WhatsApp, **n8n** as the glue. All three are integrated at the

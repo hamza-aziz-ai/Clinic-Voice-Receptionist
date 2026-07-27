@@ -610,3 +610,5 @@ CLAUDE.md
 
 # Project Outputs
 runs/
+# Local speech models - hundreds of MB, downloaded by scripts/setup_voice.py
+models/

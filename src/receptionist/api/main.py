@@ -5,15 +5,19 @@ scheduling or evaluation layers; nothing is derived in the browser.
 """
 from __future__ import annotations
 
+import base64
+import tempfile
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..asr.base import AudioRef
 from ..config import settings
 from ..evaluation.corpus import CASES, REFERENCE
 from ..evaluation.harness import evaluate
@@ -170,6 +174,87 @@ def utterance(call_id: str, req: Utterance) -> dict[str, Any]:
         req.word_confidences,
     )
     return {"reply": reply, **session.to_dict()}
+
+
+def _voice():
+    """Recogniser and speaker, built once on first use.
+
+    Loading a Whisper checkpoint takes seconds and holds GPU memory, so it
+    happens when voice is first used rather than at import - a text-only
+    deployment should not pay for a model it never calls.
+    """
+    global _TRANSCRIBER, _SPEAKER
+    if _TRANSCRIBER is None:
+        from ..asr.whisper_local import WhisperTranscriber
+        from ..tts.piper_tts import PiperSpeaker
+
+        _TRANSCRIBER = WhisperTranscriber(
+            settings.whisper_model, device=settings.whisper_device
+        )
+        _SPEAKER = PiperSpeaker(settings.piper_voice_dir)
+    return _TRANSCRIBER, _SPEAKER
+
+
+_TRANSCRIBER: Any = None
+_SPEAKER: Any = None
+
+
+@app.post("/calls/{call_id}/audio")
+async def utterance_audio(call_id: str, audio: UploadFile = File(...)) -> dict[str, Any]:
+    """One spoken turn: audio in, agent reply as text and speech.
+
+    Push-to-talk rather than continuous listening. Endpointing - deciding
+    when the caller has stopped speaking - is its own hard problem, and doing
+    it badly makes a system feel broken in a way that has nothing to do with
+    whether the booking logic is right. The button sidesteps it honestly
+    instead of half-solving it.
+
+    The recording is the caller only: the agent's replies play through the
+    speaker and never enter the microphone stream. That is what makes a mono
+    capture safe here when a mixed call recording is not.
+    """
+    if not settings.voice_enabled:
+        raise HTTPException(503, "voice is disabled; set VOICE_ENABLED=1")
+
+    session = SESSIONS.get(call_id)
+    if session is None:
+        raise HTTPException(404, f"No call {call_id!r}")
+
+    transcriber, speaker = _voice()
+    suffix = Path(audio.filename or "turn.webm").suffix or ".webm"
+    tmp = Path(tempfile.gettempdir()) / f"turn-{uuid.uuid4().hex}{suffix}"
+    tmp.write_bytes(await audio.read())
+
+    try:
+        transcript = transcriber.transcribe(
+            AudioRef(uri=str(tmp), sample_rate_hz=48000, channels=1,
+                     single_speaker=True),
+            language_hint=session.language if session.language != "uncertain" else None,
+        )
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    if transcript is None or not transcript.text.strip():
+        # Nothing intelligible. Saying so is better than feeding empty text
+        # into the extractor and reporting that no details were captured.
+        return {"heard": "", "reply": "Sorry, I didn't catch that.",
+                "audio": None, **session.to_dict()}
+
+    reply = handler.handle_utterance(
+        session, transcript.text, datetime.now(), transcript.word_confidences()
+    )
+    spoken = speaker.synthesize(reply, session.language)
+    return {
+        "heard": transcript.text,
+        "reply": reply,
+        # None when the language has no voice - Tamil and Kannada have no
+        # Piper model, and the console shows the text instead of playing
+        # something that would not be recognisable as their language.
+        "audio": base64.b64encode(spoken).decode() if spoken else None,
+        "asr_model": transcript.model,
+        "asr_notes": transcript.notes,
+        **session.to_dict(),
+    }
 
 
 @app.get("/calls")

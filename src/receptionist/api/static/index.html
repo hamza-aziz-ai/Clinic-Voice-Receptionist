@@ -47,7 +47,14 @@
         <div class="row">
           <button type="submit" class="primary">Send to agent</button>
           <button type="button" id="new-call">Start a new call</button>
+          <button type="button" id="talk" aria-describedby="talk-hint">🎤 Hold to talk</button>
         </div>
+        <p class="hint" id="talk-hint">
+          Push-to-talk: hold the button, speak, release. Requires the server to
+          be started with <code>VOICE_ENABLED=1</code> and microphone permission.
+          Tamil and Kannada have no free voice model, so the agent replies in
+          text for those languages rather than mispronouncing them.
+        </p>
         <fieldset class="examples">
           <legend>Example utterances</legend>
           <button type="button" class="chip" data-fill="Hello my name is Priya Menon I need a cleaning tomorrow at 3 pm my number is nine seven one five zero one two three four five six seven">English · full booking</button>

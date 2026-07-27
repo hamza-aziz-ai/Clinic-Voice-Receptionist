@@ -74,9 +74,17 @@ class AudioRef:
     # the two parties cannot be separated - see the module docstring for why
     # that is refused rather than approximated.
     caller_channel: int | None = 0
+    # True when the audio provably contains one speaker: a browser microphone
+    # capture, where the agent's replies are played through the speaker and
+    # never enter the stream. Mono is safe here for the same reason a mixed
+    # call recording is not - the danger was never the channel count, it was
+    # the agent's own read-backs being scored as if the caller had said them.
+    single_speaker: bool = False
 
     @property
     def is_separable(self) -> bool:
+        if self.single_speaker:
+            return True
         return self.channels >= 2 and self.caller_channel is not None
 
     @property
