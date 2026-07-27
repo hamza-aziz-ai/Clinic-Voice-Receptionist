@@ -128,13 +128,18 @@ class AiSensyConnector(MessagingConnector):
         self.timeout_s = timeout_s
 
     def send(self, message: OutboundMessage) -> dict[str, Any]:
-        import httpx
+        # httpx2, not httpx. Starlette's test client already prefers httpx2
+        # when both are importable, and having the app under test on one
+        # major version while the connector is on another is how a transport
+        # behaviour change - redirect handling, timeout semantics - reaches
+        # production without appearing in a single test.
+        import httpx2
 
         body = build_request(message, self.api_key)
         url = f"{self.base_url}{AISENSY_CAMPAIGN_PATH}"
         try:
-            response = httpx.post(url, json=body, timeout=self.timeout_s)
-        except httpx.HTTPError as exc:
+            response = httpx2.post(url, json=body, timeout=self.timeout_s)
+        except httpx2.HTTPError as exc:
             # Transport failure is retryable; a rejected template is not.
             # The dispatcher needs to tell them apart, so say which it was.
             return {"ok": False, "provider": self.name, "retryable": True,

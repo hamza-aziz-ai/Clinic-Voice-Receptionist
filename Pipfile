@@ -8,11 +8,10 @@ fastapi = "*"
 uvicorn = "*"
 pydantic = "*"
 pydantic-settings = "*"
+# messaging/aisensy.py posts with this, and starlette's test client picks it
+# over httpx when both are present - so the connector and the app under test
+# share one transport rather than differing by a major version.
 httpx2 = "*"
-# messaging/aisensy.py imports httpx directly. It currently arrives as a
-# transitive dependency of ollama, which would make the AiSensy connector
-# break on a dependency bump it has nothing to do with.
-httpx = "*"
 langchain = "*"
 langchain-ollama = "*"
 ollama = "*"

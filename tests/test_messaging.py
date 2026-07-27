@@ -244,3 +244,66 @@ def test_dispatch_is_idempotent_across_passes():
     dispatch_due([m], connector, cal, now=when)
     dispatch_due([m], connector, cal, now=when)
     assert len(connector.sent) == 1
+
+
+# ------------------------------------------------------- live connector (httpx2)
+def test_live_connector_posts_the_campaign_body(monkeypatch):
+    """The real send path had no coverage at all - only the mock was tested."""
+    import httpx2
+    from receptionist.messaging.aisensy import AISENSY_CAMPAIGN_PATH, AiSensyConnector
+
+    seen = {}
+
+    class Resp:
+        status_code = 200
+        text = '{"success":true}'
+
+        def json(self):
+            return {"success": True}
+
+    def fake_post(url, json=None, timeout=None):
+        seen.update(url=url, body=json, timeout=timeout)
+        return Resp()
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+    result = AiSensyConnector("live-key").send(message())
+
+    assert result["ok"] and result["status_code"] == 200
+    assert seen["url"] == f"https://backend.aisensy.com{AISENSY_CAMPAIGN_PATH}"
+    assert seen["body"]["apiKey"] == "live-key"
+    assert seen["body"]["templateParams"][0] == "Priya Menon"
+
+
+def test_transport_failure_is_reported_retryable(monkeypatch):
+    import httpx2
+    from receptionist.messaging.aisensy import AiSensyConnector
+
+    def boom(url, json=None, timeout=None):
+        raise httpx2.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx2, "post", boom)
+    result = AiSensyConnector("live-key").send(message())
+    assert result["ok"] is False and result["retryable"] is True
+
+
+def test_4xx_is_not_retryable_but_5xx_is(monkeypatch):
+    """Retrying a rejected template loops forever; retrying a 500 is free."""
+    import httpx2
+    from receptionist.messaging.aisensy import AiSensyConnector
+
+    class Resp:
+        text = "nope"
+
+        def __init__(self, code):
+            self.status_code = code
+
+        def json(self):
+            raise ValueError("not json")
+
+    for code, retryable in ((400, False), (429, True), (500, True), (503, True)):
+        monkeypatch.setattr(httpx2, "post", lambda *a, c=code, **k: Resp(c))
+        result = AiSensyConnector("live-key").send(message())
+        assert result["ok"] is False
+        assert result["retryable"] is retryable, code
+        # A non-JSON error body must not mask the status code.
+        assert result["response"]["raw"] == "nope"
