@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 141 passed
+$ python -m pytest -q          # 179 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -134,6 +134,68 @@ webhook retry with the same idempotency key → same booking id
 Plus clinic hours, the Friday closure, lunch break, and per-procedure
 durations driving the conflict window (a 90-minute root canal blocks
 differently from a 20-minute checkup).
+
+---
+
+## A second extractor that is only allowed to disagree
+
+`gpt-oss:120b-cloud` via Ollama and LangChain, extracting the same four slots
+independently. Off by default (`LLM_CROSSCHECK_ENABLED=1`).
+
+**Disagreement lowers confidence. Agreement never raises it.** The symmetric
+version — two extractors agree, so trust the value more — is wrong in the
+direction that hurts. Both read the *same* degraded transcript, so their errors
+are correlated: when ASR turns "five" into "nine", both read nine and both
+agree, confidently, on a wrong number. A symmetric rule takes that as evidence
+and pushes the slot over its threshold. The worst case of the asymmetric design
+is a read-back that was not strictly necessary; the worst case of the symmetric
+one is a wrong appointment nobody was asked about.
+
+It also never reports its own confidence and never overwrites a value. A model
+asked "how sure are you?" answers with the same process that produced the
+answer, so a wrong answer arrives with a wrong confidence attached.
+
+### What it honestly checks
+
+Names and phone numbers are replaced with **surrogates of the same script and
+shape** before anything leaves the machine — a Malayalam name becomes a
+different Malayalam name, a UAE mobile a different valid UAE mobile — so
+ollama.com never sees a patient. Masking them as `<NAME>` instead would have
+destroyed the segmentation problem the model is being asked to solve.
+
+The cost is real and worth stating: whatever the model returns for those two
+fields is a value **we injected**, so agreement on them is guaranteed and means
+nothing. The cross-check has teeth on `appointment_time` and `procedure` only.
+Those two are compared; the redacted two are not compared at all, because a
+reassuring number that means nothing is worse than no number.
+
+If any identifier cannot be redacted verbatim, or a digit run survives that the
+rule extractor never found, **nothing is sent**. That guard is what exposed the
+name bug fixed in the commit before this one.
+
+### What the model actually did
+
+| Finding | Detail |
+|---|---|
+| LangChain's default `json_schema` method | **Ignored entirely.** The model answered under invented field names — `caller_name`, `treatment_code` — failing validation on every call. Ollama's `format` is not enforced for this cloud-proxied model. |
+| `method="function_calling"` | Correct field names, 5/5 procedure agreement, every datetime right including `15/08 at 11am`. |
+| `procedure` as a bare `str` | Returned `procedure_cleaning` — it invented a convention from the field name. A `Literal` fixed it. |
+| Latency | **4.8s per call.** Too slow for a conversational turn. |
+
+That last row is a design constraint, not a footnote. The post-call ingest asks
+**once for the whole transcript** rather than once per replayed turn, taking a
+five-turn call from ~24s of webhook time to ~5s, on a question whose answer does
+not change between turns.
+
+The failure mode worth naming: while the schema was being ignored, the model
+*had* the right answer and the integration threw it away. **A cross-check that
+silently returns nothing looks exactly like a cross-check that agrees.** Every
+failure path is logged and surfaces as `available: false` rather than as
+silence.
+
+Ollama being down, timing out, or returning garbage all degrade to "no second
+opinion" and never to a failed call. A receptionist that stops booking because a
+language model is unreachable is worse than one that never had a language model.
 
 ---
 
@@ -311,6 +373,10 @@ the real request body, so an ordering mistake fails offline.
 - **The corpus is 10 utterances.** Enough to catch the bugs above; not enough
   to make a claim about production accuracy.
 - **No auth, no persistence.** Sessions are in memory.
-- **Slot extraction is rule-based, not an LLM.** For a closed schema with four
-  fields, rules are inspectable, testable and free — and confidence means
-  something specific rather than being a softmax the model reports about itself.
+- **Slot extraction is rule-based.** For a closed schema with four fields,
+  rules are inspectable, testable and free — and confidence means something
+  specific rather than being a softmax the model reports about itself. The LLM
+  is a *second* extractor bolted alongside, allowed only to lower confidence;
+  it never produces a value that gets booked.
+- **The cross-check is off by default and has never run against real calls.**
+  Its numbers above are from five hand-written utterances, not a corpus.

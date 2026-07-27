@@ -311,3 +311,101 @@ def test_past_appointment_time_never_books_silently():
     result = ingest_execution(ex, handler, now=NOW + timedelta(days=2))
     assert result.outcome != "booked"
     assert handler.calendar.active() == []
+
+
+def test_crosscheck_is_asked_once_per_call_not_once_per_turn():
+    """The model call is the slowest thing in the webhook - 4.8s measured.
+    Asking per replayed turn spends five times that on text that is not
+    changing between turns."""
+    calls = []
+
+    def hook(text, now, name, phone):
+        calls.append(text)
+        return None
+
+    handler = CallHandler(Calendar(hours=ClinicHours(), chairs=2),
+                          MockWhatsApp(), crosscheck=hook)
+    ex = parse_execution(payload(
+        "assistant: Hi.\n"
+        "user: my name is Priya Menon\n"
+        "user: a cleaning please\n"
+        "user: tomorrow at 3 pm\n"
+        "user: my number is 0501234567\n"
+    ))
+    ingest_execution(ex, handler, now=NOW)
+    assert len(calls) == 1, f"model called {len(calls)} times"
+    # It is asked about the whole call, not one turn of it.
+    assert "Priya Menon" in calls[0] and "0501234567" in calls[0]
+
+
+def test_a_failing_crosscheck_never_fails_the_webhook():
+    def exploding(text, now, name, phone):
+        raise TimeoutError("ollama unreachable")
+
+    handler = CallHandler(Calendar(hours=ClinicHours(), chairs=2),
+                          MockWhatsApp(), crosscheck=exploding)
+    ex = parse_execution(payload(
+        "assistant: Thank you for calling.\n"
+        "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm\n"
+        "assistant: I have your name as Priya Menon. Did I get that right?\n"
+        "user: yes that's right\n"
+        "user: my number is 0501234567\n"
+        "assistant: Is that correct?\n"
+        "user: yes correct\n"
+        "assistant: Shall I book that?\n"
+        "user: yes please\n"
+    ))
+    result = ingest_execution(ex, handler, now=NOW)
+    assert result.outcome == "booked", result.reason
+
+
+# A call carrying exactly the read-backs the rule extractor asks for and no
+# more: without word confidences only the phone falls below its threshold, so
+# there is one spare "yes". Any additional read-back therefore goes unanswered.
+_EXACTLY_ENOUGH = (
+    "assistant: Thank you for calling.\n"
+    "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm "
+    "my number is 0501234567\n"
+    "assistant: Let me confirm your number. Is that correct?\n"
+    "user: yes correct\n"
+)
+
+
+def test_without_the_crosscheck_this_call_books():
+    """Baseline for the test below - the difference between them is the only
+    thing the second extractor changed."""
+    handler = make_handler()
+    result = ingest_execution(parse_execution(payload(_EXACTLY_ENOUGH)), handler, now=NOW)
+    assert result.outcome == "booked", result.reason
+
+
+def test_a_disagreeing_crosscheck_blocks_the_booking():
+    """The whole point: the rules were confident, the second extractor read
+    something else, and now a human gets asked instead of a chair being
+    reserved for a treatment nobody requested."""
+    from receptionist.nlu.llm_extractor import LLMExtraction
+
+    def dissenting(text, now, name, phone):
+        return LLMExtraction(procedure="extraction")
+
+    handler = CallHandler(Calendar(hours=ClinicHours(), chairs=2),
+                          MockWhatsApp(), crosscheck=dissenting)
+    result = ingest_execution(parse_execution(payload(_EXACTLY_ENOUGH)),
+                              handler, now=NOW)
+    assert result.outcome == "needs_callback"
+    assert "procedure" in result.unresolved
+    assert handler.calendar.active() == []
+
+
+def test_an_agreeing_crosscheck_changes_nothing():
+    """Agreement must not make a borderline call book that would not have."""
+    from receptionist.nlu.llm_extractor import LLMExtraction
+
+    def agreeing(text, now, name, phone):
+        return LLMExtraction(procedure="cleaning")
+
+    handler = CallHandler(Calendar(hours=ClinicHours(), chairs=2),
+                          MockWhatsApp(), crosscheck=agreeing)
+    result = ingest_execution(parse_execution(payload(_EXACTLY_ENOUGH)),
+                              handler, now=NOW)
+    assert result.outcome == "booked", result.reason

@@ -8,7 +8,14 @@ fastapi = "*"
 uvicorn = "*"
 pydantic = "*"
 pydantic-settings = "*"
+httpx2 = "*"
+# messaging/aisensy.py imports httpx directly. It currently arrives as a
+# transitive dependency of ollama, which would make the AiSensy connector
+# break on a dependency bump it has nothing to do with.
 httpx = "*"
+langchain = "*"
+langchain-ollama = "*"
+ollama = "*"
 
 [dev-packages]
 pytest = "*"

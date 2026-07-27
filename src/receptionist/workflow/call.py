@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from ..messaging.base import MessagingConnector, OutboundMessage, render_template
+from ..nlu.crosscheck import CrossCheckReport, apply_crosscheck
 from ..nlu.language import LANGUAGE_NAMES, detect_language
 from ..nlu.slots import SlotSet, extract_slots, readback_prompt
 from ..scheduling.calendar import Calendar
@@ -62,6 +63,16 @@ class CallSession:
     # Supplied when the call originates from a source that can redeliver, so
     # a retry reserves the same appointment instead of a second one.
     idempotency_key: str | None = None
+    # What the second extractor said last turn, for the console. None means
+    # no cross-check ran, which is the default and not a fault.
+    crosscheck: CrossCheckReport | None = None
+    # A second opinion computed once for the whole call, used instead of
+    # calling the model on every turn. Set by the post-call ingest, where the
+    # entire transcript is available up front. Measured at 4.8s per model
+    # call, a five-turn replay spends 24 seconds in a webhook handler to ask
+    # the same question five times about text that is not changing.
+    crosscheck_cache: Any = None
+    crosscheck_cached: bool = False
 
     def say(self, text: str, note: str = "") -> str:
         self.transcript.append(Turn("agent", text, self.state, note))
@@ -81,6 +92,7 @@ class CallSession:
             "language_confidence": round(self.language_confidence, 2),
             "booking_id": self.booking_id,
             "escalation_reason": self.escalation_reason,
+            "crosscheck": self.crosscheck.to_dict() if self.crosscheck else None,
             "slots": [
                 {
                     "name": s.name,
@@ -120,11 +132,17 @@ class CallHandler:
         messaging: MessagingConnector,
         clinic_name: str = "Al Noor Dental",
         review_link: str = "https://g.page/r/alnoor-dental/review",
+        crosscheck: Any = None,
     ) -> None:
         self.calendar = calendar
         self.messaging = messaging
         self.clinic_name = clinic_name
         self.review_link = review_link
+        # Callable(transcript, reference_time, name, phone) -> LLMExtraction
+        # or None. Injected rather than imported so the workflow layer has no
+        # opinion about LangChain, and so the default remains a system with no
+        # second extractor at all.
+        self.crosscheck = crosscheck
 
     # ------------------------------------------------------------------
     def start(self, caller_number: str = "") -> CallSession:
@@ -171,6 +189,7 @@ class CallHandler:
         session.collect_turns += 1
         session.slots = extract_slots(text, now, word_confidences, session.slots)
         self._apply_ceiling(session)
+        self._apply_crosscheck(session, text, now)
 
         if session.collect_turns > MAX_COLLECT_TURNS:
             return self._escalate(session, "too many turns without a complete booking")
@@ -224,6 +243,33 @@ class CallHandler:
         if session.readback_failures > MAX_READBACK_FAILURES:
             return self._escalate(session, "could not obtain a clear confirmation")
         return session.say("Sorry, was that a yes or a no?", "ambiguous confirmation")
+
+    def _apply_crosscheck(self, session: CallSession, text: str, now: datetime) -> None:
+        """Ask the second extractor, and let it lower confidence only.
+
+        Runs after the ceiling and before anything reads
+        ``pending_confirmation``, so a disagreement is visible to the same
+        booking decision the rule extractor's own confidence feeds.
+
+        Any failure inside leaves the call exactly as it was. The second
+        opinion is an enhancement; a caller must not be unable to book a
+        cleaning because a language model timed out.
+        """
+        if self.crosscheck is None and not session.crosscheck_cached:
+            return
+        try:
+            if session.crosscheck_cached:
+                extraction = session.crosscheck_cache
+            else:
+                extraction = self.crosscheck(
+                    text, now,
+                    session.slots.patient_name.value,
+                    session.slots.phone.raw_text,
+                )
+            report = apply_crosscheck(session.slots, extraction)
+        except Exception:
+            return
+        session.crosscheck = report
 
     @staticmethod
     def _apply_ceiling(session: CallSession) -> None:

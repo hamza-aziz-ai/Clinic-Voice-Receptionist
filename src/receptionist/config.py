@@ -48,6 +48,21 @@ class Settings:
     clinic_utc_offset_hours: float = field(
         default_factory=lambda: float(os.environ.get("CLINIC_UTC_OFFSET_HOURS", "4"))
     )
+    # LLM second-opinion extractor. Off by default: it is an enhancement, and
+    # a deployment that has not thought about sending transcripts to a remote
+    # model should not start doing it because a package was installed.
+    llm_crosscheck_enabled: bool = field(
+        default_factory=lambda: os.environ.get(
+            "LLM_CROSSCHECK_ENABLED", ""
+        ).strip().lower() in ("1", "true", "yes")
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.environ.get("LLM_MODEL", "gpt-oss:120b-cloud")
+    )
+    llm_base_url: str = field(
+        default_factory=lambda: os.environ.get("LLM_BASE_URL", "http://localhost:11434")
+    )
+
     clinic_name: str = field(
         default_factory=lambda: os.environ.get("CLINIC_NAME", "Al Noor Dental")
     )

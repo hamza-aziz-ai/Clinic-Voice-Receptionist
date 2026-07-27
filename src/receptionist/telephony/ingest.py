@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from ..nlu.slots import extract_slots
 from ..workflow.call import CallHandler, CallSession
 from .bolna import BolnaExecution, confidence_ceiling
 
@@ -100,6 +101,7 @@ def ingest_execution(
     # Set before the first utterance so the very first extraction is clamped.
     session.confidence_ceiling = confidence_ceiling(execution.extracted_data)
     session.idempotency_key = execution.idempotency_key()
+    _precompute_crosscheck(session, handler, caller_turns, now)
 
     for turn in caller_turns:
         if session.state in ("ended", "escalated"):
@@ -128,6 +130,42 @@ def ingest_execution(
         _callback_reason(session, execution),
         session=session, unresolved=unresolved,
     )
+
+
+def _precompute_crosscheck(
+    session: CallSession,
+    handler: CallHandler,
+    caller_turns: list[str],
+    now: datetime,
+) -> None:
+    """Ask the second extractor once, about the whole call.
+
+    The live path asks per turn because it only ever has one turn. Here the
+    entire transcript is already in hand, and the model call is the slowest
+    thing in the request - measured at 4.8 seconds against
+    gpt-oss:120b-cloud. Asking once instead of once per turn takes a
+    five-turn replay from roughly 24 seconds of webhook time to five, on a
+    question whose answer does not change between turns.
+
+    Failure is silent by design: no second opinion is the documented
+    behaviour when the model is unavailable, and a webhook must not fail
+    because a cross-check did.
+    """
+    if handler.crosscheck is None:
+        return
+
+    joined = " ".join(caller_turns)
+    try:
+        # Spans come from the rule extractor over the same joined text, so the
+        # redactor removes what is actually there rather than what a single
+        # turn happened to contain.
+        spans = extract_slots(joined, now)
+        session.crosscheck_cache = handler.crosscheck(
+            joined, now, spans.patient_name.value, spans.phone.raw_text,
+        )
+        session.crosscheck_cached = True
+    except Exception:
+        return
 
 
 def _callback_reason(session: CallSession, execution: BolnaExecution) -> str:

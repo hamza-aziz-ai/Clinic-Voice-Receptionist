@@ -46,9 +46,33 @@ messaging = (
     if settings.aisensy_api_key
     else MockAiSensy()
 )
+def _crosscheck_hook():
+    """The LLM second opinion, or None when it is switched off.
+
+    Building the chat model once at import would make a cold Ollama a
+    startup failure for the whole API. It is constructed on first use inside
+    the extractor instead, and every error there returns None.
+    """
+    if not settings.llm_crosscheck_enabled:
+        return None
+
+    from ..nlu.llm_extractor import build_chat_model, extract_llm_slots
+
+    model = None
+
+    def hook(text, now, name, phone):
+        nonlocal model
+        if model is None:
+            model = build_chat_model(settings.llm_model, settings.llm_base_url)
+        return extract_llm_slots(text, now, name, phone, chat_model=model)
+
+    return hook
+
+
 handler = CallHandler(
     calendar, messaging,
     clinic_name=settings.clinic_name, review_link=settings.review_link,
+    crosscheck=_crosscheck_hook(),
 )
 SESSIONS: dict[str, CallSession] = {}
 
