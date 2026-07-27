@@ -154,13 +154,32 @@ def test_dispatch_sends_the_reminder_only_once_it_is_due(webhook_open):
 
 
 def test_console_is_served():
-    assert client.get("/").status_code == 200
+    assert client.get("/console/").status_code == 200
     assert client.get("/console/styles.css").status_code == 200
     assert client.get("/console/app.js").status_code == 200
 
 
+def test_root_redirects_rather_than_serving_a_second_copy():
+    """Served at "/", index.html's relative assets resolve to /styles.css and
+    /app.js, which are not mounted - the page renders unstyled and inert."""
+    assert client.get("/", follow_redirects=False).status_code in (307, 308)
+    assert client.get("/", follow_redirects=False).headers["location"] == "/console/"
+
+
+def test_every_asset_the_console_references_resolves():
+    """The bug this catches: 200 on the page and 200 on the asset, but never
+    from the same document."""
+    import re as _re
+    html = client.get("/console/").text
+    refs = _re.findall(r'(?:href|src)="([^"#:]+)"', html)
+    assert refs, "console references no assets at all"
+    for ref in refs:
+        target = ref if ref.startswith("/") else f"/console/{ref}"
+        assert client.get(target).status_code == 200, f"{ref} 404s from /console/"
+
+
 def test_console_html_has_accessibility_landmarks():
-    html = client.get("/").text
+    html = client.get("/console/").text
     for marker in ('lang="en"', "skip-link", 'role="status"', 'aria-live="polite"',
                    "<main", 'scope="col"', "<caption"):
         assert marker in html, f"missing {marker}"

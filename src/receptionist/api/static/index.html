@@ -79,6 +79,19 @@
 
   <section role="tabpanel" id="panel-messages" aria-labelledby="tab-messages" hidden>
     <h2>WhatsApp queue</h2>
+    <p class="note">
+      The confirmation goes out during the call. The reminder and review request
+      are queued with a send time and wait for a dispatch pass — in production
+      that is n8n's schedule; here it is the button. A dispatch reads the booking
+      status first, so a cancelled appointment cancels its reminder, and a
+      reminder whose appointment has already passed <strong>expires</strong>
+      rather than arriving late.
+    </p>
+    <p class="controls">
+      <label for="dispatch-at">Run dispatch as if the time were</label>
+      <input type="datetime-local" id="dispatch-at">
+      <button type="button" id="dispatch">Dispatch due messages</button>
+    </p>
     <table aria-label="Outbound WhatsApp messages">
       <thead>
         <tr><th scope="col">Template</th><th scope="col">To</th><th scope="col">Language</th>

@@ -302,15 +302,22 @@ class CallHandler:
             "when": f"{booking.start:%A %d %B at %I:%M %p}",
             "link": self.review_link,
         }
+        # The reminder body already says "tomorrow" - in every language - so it
+        # takes the time alone. Sharing one parameter dict across all three
+        # produced "your cleaning is tomorrow at Tuesday 28 July at 11:00 AM",
+        # which read as obviously wrong in English and which I could not have
+        # spotted in the other four.
+        reminder_params = {**params, "when": f"{booking.start:%I:%M %p}"}
+
         plan = [
-            ("appointment_confirmation", None),
-            ("appointment_reminder", booking.start - timedelta(days=1)),
-            ("review_request", booking.start + timedelta(hours=2)),
+            ("appointment_confirmation", None, params),
+            ("appointment_reminder", booking.start - timedelta(days=1), reminder_params),
+            ("review_request", booking.start + timedelta(hours=2), params),
         ]
-        for template, when in plan:
+        for template, when, body_params in plan:
             msg = OutboundMessage(
                 template=template, to=booking.phone, language=session.language,
-                parameters=params, send_after=when, booking_id=booking.booking_id,
+                parameters=body_params, send_after=when, booking_id=booking.booking_id,
             )
             session.messages.append(msg)
             if when is None:                       # immediate

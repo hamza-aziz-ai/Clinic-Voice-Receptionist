@@ -206,6 +206,35 @@ def test_connector_raising_is_a_permanent_failure():
     assert report.failed
 
 
+def test_reminder_says_tomorrow_once_not_twice():
+    """The reminder body already contains "tomorrow" in all five languages,
+    so passing it the full date produced "tomorrow at Tuesday 28 July at
+    11:00 AM" - visibly wrong in English, invisible to me in the others."""
+    from receptionist.messaging.base import render_template
+    from receptionist.scheduling.calendar import Calendar as Cal
+    from receptionist.workflow.call import CallHandler
+
+    handler = CallHandler(Cal(hours=ClinicHours(), chairs=1), MockAiSensy())
+    session = handler.start("+971501234567")
+    session.language = "en"
+    booking = handler.calendar.book(
+        "Priya Menon", "+971501234567", "cleaning", APPOINTMENT).booking
+    handler._queue_messages(session, booking)
+
+    reminder = next(m for m in session.messages
+                    if m.template == "appointment_reminder")
+    confirmation = next(m for m in session.messages
+                        if m.template == "appointment_confirmation")
+
+    assert reminder.parameters["when"] == "03:00 PM"
+    body = render_template("appointment_reminder", "en", reminder.parameters)
+    assert "tomorrow at 03:00 PM" in body
+    assert "July" not in body
+
+    # The confirmation is not a reminder: it still carries the full date.
+    assert "28 July" in confirmation.parameters["when"]
+
+
 def test_dispatch_is_idempotent_across_passes():
     cal, bid = booked_calendar()
     m = message("appointment_reminder", booking_id=bid,

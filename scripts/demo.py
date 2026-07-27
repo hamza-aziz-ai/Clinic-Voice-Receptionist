@@ -6,6 +6,14 @@ from datetime import datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+# Windows consoles default to cp1252, which cannot encode Tamil, Kannada,
+# Malayalam, Hindi or the box-drawing rules below - the demo died on its
+# first banner. Forcing UTF-8 on stdout is the fix; on a project whose whole
+# subject is Indic text, a demo that crashes on the default Windows terminal
+# is not a footnote.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from receptionist.evaluation.corpus import CASES, REFERENCE  # noqa: E402
 from receptionist.evaluation.harness import evaluate, render_report  # noqa: E402
 from receptionist.messaging.base import MockWhatsApp, render_template  # noqa: E402
@@ -82,7 +90,74 @@ def main() -> int:
     b = cal4.book("R", "+919876543210", "checkup", datetime(2026, 7, 28, 17, 0), idempotency_key="k")
     print(f"  webhook retry returns the same booking: {a.booking.booking_id == b.booking.booking_id}")
 
-    banner("5 · ACCURACY IN LANGUAGES I DO NOT SPEAK")
+    banner("5 · THE ACTUAL DELIVERABLE — Bolna webhook → booking → WhatsApp")
+    from receptionist.messaging.aisensy import MockAiSensy
+    from receptionist.messaging.dispatch import dispatch_due
+    from receptionist.telephony.bolna import parse_execution
+    from receptionist.telephony.ingest import ingest_execution
+
+    transcript = (
+        "assistant: Thank you for calling Al Noor Dental. How can I help?\n"
+        "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm\n"
+        "assistant: I have your name as Priya Menon. Did I get that right?\n"
+        "user: yes that's right\n"
+        "user: my number is 0501234567\n"
+        "assistant: Let me confirm your number. Is that correct?\n"
+        "user: yes correct\n"
+        "assistant: Shall I book that?\n"
+        "user: yes please\n"
+    )
+    cal5, wa5 = Calendar(chairs=2), MockAiSensy()
+    h5 = CallHandler(cal5, wa5)
+    execution = parse_execution({
+        "id": "exec-demo-1", "agent_id": "agent-1", "status": "completed",
+        "transcript": transcript, "created_at": "2026-07-27T05:00:00Z",
+        "telephony_data": {"from_number": "+971501234567", "call_type": "inbound"},
+    })
+    print("  Bolna posts the execution. No word confidences exist in it, so the")
+    print("  read-backs that happened live are what confirm the slots — the")
+    print("  caller's turns are replayed through the same gate the console uses.\n")
+    r5 = ingest_execution(execution, h5)
+    print(f"  outcome: {r5.outcome} · booking {r5.booking_id}")
+    print(f"  AiSensy request: campaign={wa5.requests[0]['campaignName']}")
+    print(f"                   templateParams={wa5.requests[0]['templateParams']}")
+
+    print("\n  Same payload redelivered (Bolna retries on non-2xx):")
+    again = ingest_execution(parse_execution({
+        "id": "exec-demo-1", "agent_id": "agent-1", "status": "completed",
+        "transcript": transcript, "created_at": "2026-07-27T05:00:00Z",
+        "telephony_data": {"from_number": "+971501234567", "call_type": "inbound"},
+    }), h5)
+    print(f"    same booking: {again.booking_id == r5.booking_id} · "
+          f"calendar holds {len(cal5.active())} · WhatsApp sent {len(wa5.sent)}")
+
+    print("\n  The same call without a read-back:")
+    r5b = ingest_execution(parse_execution({
+        "id": "exec-demo-2", "agent_id": "agent-1", "status": "completed",
+        "created_at": "2026-07-27T05:00:00Z",
+        "transcript": ("assistant: How can I help?\n"
+                       "user: Priya Menon, cleaning tomorrow at 4 pm, 0501234567\n"),
+        "telephony_data": {"from_number": "+971501234567"},
+    }), h5)
+    print(f"    outcome: {r5b.outcome} — {r5b.reason}")
+
+    print("\n  Scheduled sends, at the moment the reminder falls due:")
+    reminder = next(m for m in r5.session.messages if m.template == "appointment_reminder")
+    report = dispatch_due(r5.session.messages, wa5, cal5, now=reminder.send_after)
+    print(f"    {report.to_dict()['sent']} sent, {report.to_dict()['expired']} expired")
+    print("\n  And a day late, after the appointment has already happened:")
+    r5c = ingest_execution(parse_execution({
+        "id": "exec-demo-3", "agent_id": "a", "status": "completed",
+        "transcript": transcript, "created_at": "2026-07-27T05:00:00Z",
+        "telephony_data": {"from_number": "+971509999999"},
+    }), h5)
+    late = next(m for m in r5c.session.messages if m.template == "appointment_reminder")
+    late_report = dispatch_due(r5c.session.messages, wa5, cal5,
+                               now=datetime(2026, 7, 28, 16, 0))
+    print(f"    reminder was due {late.send_after:%d %b %H:%M} · "
+          f"{late_report.to_dict()['expired']} expired rather than arriving late")
+
+    banner("6 · ACCURACY IN LANGUAGES I DO NOT SPEAK")
     print("  Every test utterance is paired with the values it must produce, so")
     print("  correctness is checkable without understanding a word.\n")
     print("  SILENT = wrong AND not flagged for read-back — the only kind a patient ever receives.\n")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -209,5 +209,13 @@ app.mount("/console", StaticFiles(directory=STATIC, html=True), name="console")
 
 
 @app.get("/")
-def root() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+def root() -> RedirectResponse:
+    """Redirect rather than serve the same file from two paths.
+
+    Serving index.html here looks equivalent and is not: its stylesheet and
+    script are relative, so from "/" they resolve to /styles.css and /app.js,
+    which are not mounted. The page rendered unstyled and inert, and the
+    tests missed it because fetching "/" and fetching /console/app.js both
+    returned 200 - just never from the same document.
+    """
+    return RedirectResponse("/console/")

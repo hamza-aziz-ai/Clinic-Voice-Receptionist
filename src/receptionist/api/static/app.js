@@ -88,9 +88,28 @@ async function refreshMessages() {
       <td>${esc(m.to)}</td>
       <td>${esc(m.language_name)}</td>
       <td>${m.send_after ? esc(new Date(m.send_after).toLocaleString()) : "immediately"}</td>
-      <td class="${m.status === "sent" ? "status-ok" : "status-warn"}">${esc(m.status)}</td>
+      <td class="${statusClass(m.status)}">${esc(m.status)}</td>
       <td lang="${esc(m.language)}">${esc(m.body)}</td></tr>`).join("")
     : '<tr><td colspan="6" class="empty">No messages queued.</td></tr>';
+}
+
+// Expired and failed are errors, not warnings: an expired message means the
+// dispatch schedule did not run in time, and nobody was told anything.
+function statusClass(status) {
+  if (status === "sent") return "status-ok";
+  if (status === "expired" || status === "failed") return "status-error";
+  return "status-warn";
+}
+
+async function runDispatch() {
+  const at = $("dispatch-at").value;
+  const report = await api(`/messages/dispatch${at ? `?now=${encodeURIComponent(at)}` : ""}`,
+                           { method: "POST" });
+  await refreshMessages();
+  live(
+    `Dispatch complete. ${report.sent} sent, ${report.cancelled} cancelled, ` +
+    `${report.expired} expired, ${report.failed} failed, ${report.retrying} retrying.`
+  );
 }
 
 async function refreshEval() {
@@ -143,6 +162,7 @@ $("call-form").addEventListener("submit", async (e) => {
 });
 
 $("new-call").addEventListener("click", async () => { callId = null; await startCall(); });
+$("dispatch").addEventListener("click", runDispatch);
 document.querySelectorAll(".chip").forEach((c) =>
   c.addEventListener("click", () => { $("utterance").value = c.dataset.fill; $("utterance").focus(); }));
 

@@ -6,9 +6,15 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 69 passed
+$ python -m pytest -q          # 141 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
+
+Built against a published brief: **Bolna AI** for the inbound voice agent,
+**AiSensy** for WhatsApp, **n8n** as the glue. All three are integrated at the
+contract level — real payload shapes, real request bodies, an importable
+workflow — behind interfaces with mocks, because I have no accounts and
+pretending otherwise would make the tests meaningless.
 
 ---
 
@@ -131,14 +137,123 @@ differently from a 20-minute checkup).
 
 ---
 
+## Reading the vendor docs changed the design
+
+I assumed Bolna's webhook delivered a transcript with per-word ASR
+confidences. It does not. The execution payload carries `transcript` as a
+single string — `"assistant: …\nuser: …"` — and no confidence data at all.
+
+That removes the strongest input to the confidence model. Every slot lands on
+the no-metadata default, which is below the phone threshold, so **a post-call
+payload cannot clear the gate on its own.** Which is correct: nobody is on the
+line to be asked.
+
+What rescues the booking is that the read-backs already happened *during* the
+call, and the caller's answers are in the transcript. So the caller's turns
+are **replayed through the same state machine the console drives**:
+
+```
+Bolna execution → caller turns → CallHandler → confidence gate → Calendar.book
+```
+
+The tempting alternative was to read `extracted_data` and book what Bolna says
+the caller wanted. That would have made everything above decorative — Bolna's
+extraction has no per-slot threshold, so the one code path that books real
+appointments would bypass the read-back gate entirely. `extracted_data` still
+contributes: its `confidence_label` becomes a **ceiling**, and a ceiling can
+only lower a slot. A "High" label cannot lift a value over a threshold it
+failed on its own merits.
+
+Three outcomes, all valid: `booked`, `needs_callback`, `escalated`. The middle
+one is the interesting one — the call happened, the caller wanted an
+appointment, and the system is deliberately declining to create one because it
+is not sure what it heard. The reason names the specific slots, so reception
+knows what to ask instead of replaying the recording. A clinic can work that
+queue; it cannot work a calendar full of plausible wrong bookings.
+
+**Bolna also signs nothing.** The documented protection is source-IP
+allowlisting. That is not authentication for an endpoint that creates
+appointments and messages real numbers, so a shared secret is required as
+well — and an unset secret raises rather than skipping the check, because the
+fail-open version turns a missing environment variable into a public booking
+endpoint. Putting n8n in the middle weakens this further, since the address the
+service sees becomes n8n's; that is stated in the module rather than
+discovered.
+
+---
+
+## The failure mode WhatsApp cannot report
+
+AiSensy takes `templateParams` as a **positional array of strings**. Our
+templates use named placeholders. That conversion is where this integration
+fails worst: transpose two entries and the API accepts it, WhatsApp delivers
+it, and the patient reads
+
+> Hello **cleaning**, your **Priya Menon** at Al Noor Dental is confirmed…
+
+Nothing errors. Nothing retries. There is no status code for grammatically
+valid nonsense. So the ordering is declared once per template, next to the
+template, and a test asserts the declared order matches the actual
+placeholders **in all five languages** — the two cannot drift apart. The mock
+builds the real request body for the same reason: a mock that skipped it would
+never catch an ordering mistake.
+
+One campaign per template per language, because WhatsApp approves templates per
+language. No English fallback at the connector — that sends English under a
+Tamil contact record.
+
+The reminder and review request are queued with a send time, and the dispatcher
+is the part that is easy to leave as a TODO. Three rules, all about *not*
+sending:
+
+| Situation | What happens | Why |
+|---|---|---|
+| Booking cancelled | message cancelled | Status is read at dispatch time. A patient who cancelled must not be told they're booked tomorrow. |
+| Send window passed | **expired**, not sent | "Your appointment is tomorrow" arriving the day after is worse than silence. |
+| Transport failure | stays queued | Retrying a 500 is free. |
+| Template rejected | failed, no retry | Retrying is an infinite loop against an API that will never accept it. |
+
+Expired is counted separately from cancelled because a rising expired count
+means the dispatcher isn't running — an operational fault, not a patient
+decision.
+
+---
+
+## What n8n is allowed to do
+
+Glue: receive the delivery, forward it, fan out on the answer, run the
+dispatcher on a schedule, retry, alert a human. That is routing, and routing is
+what a visual workflow is good at.
+
+What it must not do is **decide**. The rules that make this safe aren't
+expressible as nodes — a threshold per slot, a read-back that clears a value
+when rejected, an idempotency key evaluated under the same lock as the
+availability check. A workflow can be edited by anyone with the editor open,
+has no test suite, and fails in ways that produce a booking rather than an
+error. The moment `if confidence > 0.9` appears in a Switch node, every
+guarantee here is decorative.
+
+So the contract is narrow: n8n calls `POST /webhooks/bolna` and reads
+`outcome`. The workflow is **generated, not exported from the editor**, so it
+can be diffed and asserted about — tests check that no node reaches a booking
+endpoint, that no node parameter inspects a confidence value, that the Switch
+keys match the service's own `Outcome` type (adding an outcome later breaks the
+test rather than falling through a default), and that nothing key-shaped was
+written into the committed JSON.
+
+`integrations/n8n/clinic-receptionist.json` imports directly.
+
+---
+
 ## The console
 
 Served from the same process at `/console/` — plain HTML, CSS and JavaScript.
 No npm, no bundler, no CDN. A clinic's own IT can read and edit it.
 
 Four views: simulate a call and watch slots fill with live confidence; the
-booking calendar; the WhatsApp queue with rendered message bodies per
-language; and the accuracy table above.
+booking calendar; the WhatsApp queue, with a button that runs a dispatch pass
+at any time you name, so the reminder-expires and cancelled-booking paths are
+things you can watch rather than read about; and the accuracy table above.
 
 Accessibility is part of the deliverable: skip link, semantic landmarks,
 `scope`-ed table headers with captions, labelled controls with an error
@@ -152,30 +267,47 @@ which the Indic text the whole project is about renders as boxes.
 ## Architecture
 
 ```
-telephony → nlu/language → nlu/slots ⇄ workflow/call → scheduling/calendar
-                                            ↓
-                                    messaging (WhatsApp)
+Bolna ─webhook→ telephony/ingest ─┐
+                                  ├→ workflow/call ⇄ nlu/slots → scheduling/calendar
+console ────────────────────────*─┘         ↓
+                                    messaging/dispatch → AiSensy
+n8n: routes outcomes, runs the dispatcher on a schedule, alerts a human
 ```
+
+Both entry points reach the calendar through the same state machine, which is
+the whole point: there is one confidence gate, not one per channel.
 
 | Layer | May do | May not do |
 |---|---|---|
 | `nlu` | Extract and score | Book anything |
 | `scheduling` | Reserve atomically | Interpret speech |
 | `workflow` | Sequence the call | Compute confidence |
+| `telephony` | Parse and replay a payload | Extract or book directly |
+| `messaging` | Render, send, schedule | Decide what to send |
 | `api` | Transport | Contain logic |
+| n8n | Route, schedule, retry, alert | Decide anything |
 
 Connectors (Bolna, AiSensy) sit behind interfaces with mock implementations,
-so the entire suite and demo run with no credentials.
+so the entire suite and demo run with no credentials. The AiSensy mock builds
+the real request body, so an ordering mistake fails offline.
 
 ---
 
 ## What is deliberately not here
 
-- **No real Bolna or AiSensy calls.** Both are behind interfaces with mocks.
-  I have no accounts, and pretending otherwise would make the tests meaningless.
-- **No ASR or TTS.** The system consumes transcripts with word confidences —
-  which is what Bolna's webhook delivers. Degradation is simulated, not measured
+- **No real Bolna or AiSensy calls.** Both are integrated against their
+  documented payload shapes and sit behind interfaces with mocks. I have no
+  accounts, and pretending otherwise would make the tests meaningless. The
+  n8n workflow is generated and valid for import, but has not been run against
+  a live Bolna agent.
+- **No ASR or TTS.** The system consumes transcripts. The evaluation harness
+  feeds it word confidences to simulate degradation; the Bolna path has none,
+  because Bolna does not send any — that difference is the design constraint
+  described above, not an oversight. Degradation is simulated, never measured
   on real audio.
+- **The Bolna agent prompt is not here.** Making the read-backs happen during
+  the call is a prompt-engineering job on Bolna's side. This repository assumes
+  they happened and verifies it from the transcript; it cannot make them happen.
 - **The corpus is 10 utterances.** Enough to catch the bugs above; not enough
   to make a claim about production accuracy.
 - **No auth, no persistence.** Sessions are in memory.
