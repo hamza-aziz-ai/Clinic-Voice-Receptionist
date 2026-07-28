@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 313 passed
+$ python -m pytest -q          # 324 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -143,6 +143,27 @@ time on Saturday 01 August would suit you?"* — keeping the day, asking only
 for the half that is missing. Reading back an invented `10:00 AM` and
 collecting a yes reserves a real chair at an hour nobody chose.
 
+Keeping the day is half the point, and it was quietly lost for a while. Only
+the rule extractor carried it, so when the model became the primary extractor
+a real session went:
+
+```
+you  : Friday morning
+agent: Which day works for you, and roughly what time?
+you  : Friday morning
+agent: Could you give me a day and a time — for example, Tuesday at 3 pm?
+```
+
+It had understood the day the first time and asked again anyway. **A closed
+day is settled the moment it is understood**, and that reply hangs off the
+same carried-over day — so the caller was also not told the clinic shuts on
+Fridays until after they had supplied a procedure. The check was worse than
+late: it read only the carried day, so it fired for *"Friday morning"* and
+stayed silent for *"Friday at 10 AM"*. The caller who gave a complete answer
+was the one who got no warning. It now runs before the read-back too, because
+offering *"Friday 31 July at 10 AM, shall I book that?"* collects a yes that
+cannot be honoured.
+
 **Understanding is the model's job; confidence is not.** An LLM reads the
 utterance and fills the slots — `gpt-oss:120b-cloud` through LangChain at
 ~5 s per turn — with the rule extractor as the fallback when it is
@@ -167,6 +188,18 @@ deterministically, and when the two disagree the weekday the caller actually
 named decides. If nothing decides it, the slot is read back rather than
 booked. Neither side is trusted outright — the deterministic parser reads
 *"the day after next Thursday"* as plain Thursday and is quietly a week out.
+
+**Nor the digits.** *"zero five five one two three four five six seven"* came
+back from the model as `05551234567` — one `5` too many, because a run of
+repeated digit words is exactly where a decoder loses count. The same words
+go through `normalise_phone` as `+971551234567` without difficulty. So the
+model is asked for the caller's words and the number is assembled from those.
+The read-back gate had caught this one either way, but a caught error is
+still a question asked of a caller who did not need to be asked.
+
+Both splits are the same rule, and it is the one worth taking from this
+project: **what the caller meant is the model's job; mechanical
+transcription is not.**
 
 Sending transcripts off-machine is opt-in (`LLM_ALLOW_REMOTE=1`), and the
 check looks at the model tag rather than the URL: **Ollama Cloud models are
@@ -638,6 +671,13 @@ the real request body, so an ordering mistake fails offline.
   every case happened to name a procedure outright, so a caller who described
   a symptom instead was met with the same question four times over. That
   transcript is now case `en-06`.
+
+  It is also the binding constraint on the extractor comparison below, and
+  the clearest next piece of work. The corpus tests single utterances, and
+  the last three defects were all *multi-turn* — a day dropped between turns,
+  a closure that fired on one phrasing and not another. Those were found by
+  reading a transcript, not by the harness, which is a bad way to find them
+  twice.
 - **No auth, no persistence.** Sessions are in memory.
 - **Understanding is the LLM's; the rules are the fallback.** This started as
   a hand-written slot filler and every extraction bug it had was one of that
