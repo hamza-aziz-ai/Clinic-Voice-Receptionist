@@ -40,9 +40,10 @@
           "retry": {
             "retryOnFail": true,
             "maxTries": 3
-          }
+          },
+          "timeout": 120000
         },
-        "notes": "The service decides. This node forwards the payload and reads the outcome; it must never post a booking itself."
+        "notes": "The service decides. This node forwards the payload and reads the outcome; it must never post a booking itself. Slow by design when LLM understanding is on: every replayed turn is a model call."
       },
       "id": "ingest-call",
       "name": "Ingest Call",
@@ -157,7 +158,8 @@
           "retry": {
             "retryOnFail": true,
             "maxTries": 3
-          }
+          },
+          "timeout": 30000
         },
         "notes": "needs_callback and escalated both land here. The reason names the specific slots that failed, so reception knows what to ask instead of replaying the recording."
       },
@@ -228,7 +230,8 @@
           "retry": {
             "retryOnFail": true,
             "maxTries": 2
-          }
+          },
+          "timeout": 30000
         },
         "notes": "The service decides what is due, what expired and what a cancelled booking cancels. This node only triggers a pass."
       },
@@ -384,7 +387,7 @@
   "pinData": {},
   "tags": [],
   "meta": {
-    "setup": "REQUIRED: run n8n with N8N_BLOCK_ENV_ACCESS_IN_NODE=false. n8n blocks $env in expressions by default, and every URL in this workflow is an $env reference - blocked, they resolve to undefined, the HTTP nodes fail with 'access to env vars denied', and the webhook returns 200 with an empty body while nothing reaches the service. Then set RECEPTIONIST_URL, BOLNA_WEBHOOK_SECRET and OPS_ALERT_URL. Verified against n8n 2.31.7.",
+    "setup": "REQUIRED: run n8n with N8N_BLOCK_ENV_ACCESS_IN_NODE=false. n8n blocks $env in expressions by default, and every URL in this workflow is an $env reference - blocked, they resolve to undefined, the HTTP nodes fail with 'access to env vars denied', and the webhook returns 200 with an empty body while nothing reaches the service. Then set RECEPTIONIST_URL, BOLNA_WEBHOOK_SECRET and OPS_ALERT_URL. Verified against n8n 2.31.7. These three are n8n's own environment, and are separate from the receptionist service's .env - the service reads its model, clinic hours, thresholds and credentials from there. See .env.example.",
     "description": "Glue only. Every decision that could create an appointment lives in the receptionist service, which is the only place the confidence gate and the booking lock can be enforced together and tested."
   }
 }

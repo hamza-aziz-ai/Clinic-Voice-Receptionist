@@ -58,6 +58,15 @@ OUTCOMES = ("booked", "needs_callback", "escalated", "not_actionable")
 
 DISPATCH_INTERVAL_MINUTES = 15
 
+# Ingest replays every caller turn through the booking gate. With LLM
+# understanding enabled each turn is a model call at roughly three seconds,
+# so a long call is tens of seconds. Left to n8n's default this gets cut off
+# mid-booking and retried against a half-processed call.
+INGEST_TIMEOUT_MS = 120000
+
+# Dispatch is a loop over queued messages with no model in it.
+DISPATCH_TIMEOUT_MS = 30000
+
 
 # Stable UUID for the webhook node. n8n keys the registered production URL on
 # `webhookId`, and an imported node without one activates without ever binding
@@ -116,10 +125,21 @@ def build_workflow() -> dict[str, Any]:
                 "sendBody": True,
                 "specifyBody": "json",
                 "jsonBody": "={{ JSON.stringify($json.body) }}",
-                "options": {"retry": {"retryOnFail": True, "maxTries": 3}},
+                "options": {
+                    "retry": {"retryOnFail": True, "maxTries": 3},
+                    # Explicit, and generous. Ingest replays every caller turn
+                    # through the booking gate, and with LLM understanding
+                    # switched on each turn is a model call - a six-turn call
+                    # can take the better part of half a minute. n8n's default
+                    # would eventually cut that off mid-booking, and a retry
+                    # would then replay a call that is already half-processed.
+                    "timeout": INGEST_TIMEOUT_MS,
+                },
                 "notes": (
                     "The service decides. This node forwards the payload and "
-                    "reads the outcome; it must never post a booking itself."
+                    "reads the outcome; it must never post a booking itself. "
+                    "Slow by design when LLM understanding is on: every "
+                    "replayed turn is a model call."
                 ),
             },
             type_version=4,
@@ -167,7 +187,10 @@ def build_workflow() -> dict[str, Any]:
                     '"outcome": $json.outcome, "reason": $json.reason, '
                     '"unresolved": $json.unresolved }) }}'
                 ),
-                "options": {"retry": {"retryOnFail": True, "maxTries": 3}},
+                "options": {
+                    "retry": {"retryOnFail": True, "maxTries": 3},
+                    "timeout": DISPATCH_TIMEOUT_MS,
+                },
                 "notes": (
                     "needs_callback and escalated both land here. The reason "
                     "names the specific slots that failed, so reception knows "
@@ -220,7 +243,10 @@ def build_workflow() -> dict[str, Any]:
             {
                 "method": "POST",
                 "url": f"{RECEPTIONIST_URL}/messages/dispatch",
-                "options": {"retry": {"retryOnFail": True, "maxTries": 2}},
+                "options": {
+                    "retry": {"retryOnFail": True, "maxTries": 2},
+                    "timeout": DISPATCH_TIMEOUT_MS,
+                },
                 "notes": (
                     "The service decides what is due, what expired and what a "
                     "cancelled booking cancels. This node only triggers a pass."
@@ -284,7 +310,11 @@ def build_workflow() -> dict[str, Any]:
                 "denied', and the webhook returns 200 with an empty body while "
                 "nothing reaches the service. Then set RECEPTIONIST_URL, "
                 "BOLNA_WEBHOOK_SECRET and OPS_ALERT_URL. Verified against "
-                "n8n 2.31.7."
+                "n8n 2.31.7. "
+                "These three are n8n's own environment, and are separate from "
+                "the receptionist service's .env - the service reads its "
+                "model, clinic hours, thresholds and credentials from there. "
+                "See .env.example."
             ),
             "description": (
                 "Glue only. Every decision that could create an appointment "

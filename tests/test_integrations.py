@@ -176,3 +176,26 @@ def test_env_access_requirement_is_documented_in_the_workflow():
     assert "N8N_BLOCK_ENV_ACCESS_IN_NODE" in blob, (
         "the deployment requirement must be stated in the workflow itself"
     )
+
+
+def test_calls_into_the_service_have_an_explicit_timeout():
+    """Ingest replays every caller turn through the gate, and with LLM
+    understanding on each turn is a model call. Left to n8n's default the
+    request is cut off mid-booking and retried against a half-processed
+    call."""
+    for node in http_nodes():
+        options = node["parameters"]["options"]
+        assert options.get("timeout"), f"{node['name']} has no timeout"
+
+    ingest = nodes_by_name()["Ingest Call"]["parameters"]["options"]["timeout"]
+    dispatch = nodes_by_name()["Dispatch Due Messages"]["parameters"]["options"]["timeout"]
+    # Ingest is the slow one; dispatch has no model in it.
+    assert ingest > dispatch
+
+
+def test_the_setup_note_separates_n8n_config_from_service_config():
+    """Two environments, and confusing them is how someone sets the model in
+    n8n and wonders why nothing changed."""
+    setup = build_workflow()["meta"]["setup"]
+    assert ".env" in setup
+    assert "N8N_BLOCK_ENV_ACCESS_IN_NODE" in setup

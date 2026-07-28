@@ -1,20 +1,30 @@
 # A voice loop that costs nothing to run
 
-Target: a caller talks to the agent and hears it answer, with no metered
-service anywhere in the path. Free of charge is the requirement — a hosted
-service is fine if it does not bill.
+**Status: built.** A caller talks to the agent in the browser and hears it
+answer, with no metered service in the path. What follows is what was chosen
+and why, and what is still missing.
+
+Measured on an RTX 4050 Laptop: Whisper `small` transcribes 6.9 s of audio in
+0.28 s, Piper synthesises at RTF 0.05, MMS covers Tamil and Kannada at
+0.17–0.20 s, and a full turn — audio in, gate, spoken reply — lands at
+0.8–1.0 s after a 7 s cold start.
+
+The two things that remain true regardless: **a dialable phone number cannot
+be free**, so the caller reaches the clinic through a web page rather than a
+handset; and **MMS-TTS is CC-BY-NC**, fine for a portfolio piece and not for a
+clinic that charges patients.
 
 ## What has to go, and what it costs to lose it
 
 | Component | Today | Free replacement | What is lost |
 |---|---|---|---|
 | Telephony | Bolna number (~$5/mo + per-minute) | **Browser WebRTC** | The number. Nobody can dial the clinic. |
-| Speech-to-text | Bolna's built-in | **faster-whisper** / **IndicConformer** | Nothing — arguably a gain, see below |
-| Text-to-speech | Bolna's built-in | **IndicF5** / **Indic Parler-TTS** | Voice quality, and latency on CPU |
-| Turn-taking, barge-in | Bolna | **LiveKit Agents** (Apache-2.0) | Has to be assembled rather than configured |
+| Speech-to-text | Bolna's built-in | **faster-whisper** *(done)* | Whisper's confidence is weaker than a CTC posterior — see below |
+| Text-to-speech | Bolna's built-in | **Piper** + **MMS** *(done)* | MMS is non-commercial; Piper has no Tamil or Kannada |
+| Turn-taking, barge-in | Bolna | push-to-talk *(done)*, LiveKit later | No barge-in, and the caller holds a button |
 | Notifications | AiSensy + WhatsApp | **Telegram** *(done)* | WhatsApp itself — see below |
 | Workflow glue | n8n | n8n community *(already self-hosted)* | Nothing |
-| LLM cross-check | `gpt-oss:120b-cloud` | *unchanged* — Ollama Cloud does not bill | Nothing |
+| Understanding | rules | **`gpt-oss:120b-cloud`** *(done)* | Free of charge, but transcripts leave the machine — opt-in |
 
 ### The two that cannot be fixed by engineering
 
@@ -35,33 +45,38 @@ enrolment rather than in money.
 
 ## The shape of the free voice path
 
+What was built, which is simpler than the plan:
+
 ```
-browser mic ──WebRTC──▶ LiveKit ──▶ VAD ──▶ ASR ──▶ /calls/{id}/utterance
-                            ▲                              │
-                            └────── TTS ◀── agent reply ◀───┘
+browser mic ──MediaRecorder──▶ POST /calls/{id}/audio
+                                      │
+              Whisper ──▶ LLM understanding ──▶ confidence gate
+                                      │
+              browser ◀── WAV ◀── Piper / MMS ◀── agent reply
 ```
 
-The service in this repository is unchanged. It already exposes exactly the
-two things a voice loop needs — `POST /calls` and
-`POST /calls/{id}/utterance` — and the console has been driving them as text
-since the beginning. The voice work is entirely about getting audio in and
-out of those endpoints.
+`POST /calls` and `POST /calls/{id}/utterance` already existed and the console
+had been driving them as text from the start, so the voice work was entirely
+about getting audio in and out of those endpoints.
 
-### Components
+### Components, as chosen
 
-- **Transport — LiveKit** (Apache-2.0, self-hosted). Handles WebRTC, jitter,
-  echo cancellation and multi-participant rooms. The alternative is raw
-  `RTCPeerConnection` plus a signalling server, which is less to install and
-  considerably more to get right.
-- **Endpointing — Silero VAD** (MIT). Deciding *when the caller has stopped
-  talking* is the difference between a conversation and a walkie-talkie, and
-  it is the part most likely to feel broken first.
-- **ASR — faster-whisper or IndicConformer.** Both free, both local. The
-  choice is argued in `asr/base.py`: Whisper has the better WER and fabricates
-  fluent text at high confidence on silence, which is adversarial to the
-  confidence gate; IndicConformer's CTC branch gives real per-word posteriors.
-- **TTS — IndicF5** (AI4Bharat, 11 Indian languages including all four
-  non-English ones here) or **Indic Parler-TTS**. Both self-hostable and free.
+- **Transport — push-to-talk, not WebRTC.** Hold the button, speak, release.
+  Endpointing — deciding when a caller has *stopped* — is its own hard
+  problem, and doing it badly makes a system feel broken for reasons
+  unrelated to whether the booking logic is right. The button sidesteps it
+  honestly rather than half-solving it. LiveKit and Silero VAD are the path
+  to a real conversation, and neither is here.
+- **ASR — faster-whisper**, against the argument in `asr/base.py`, which
+  makes the case for a CTC model because Whisper fabricates fluent text at
+  high confidence on silence. IndicConformer needs NeMo, NeMo needs torch,
+  and every AI4Bharat repository is gated. Whisper is what runs, so its
+  failure mode is mitigated instead: Silero VAD ahead of the decoder, and
+  `no_speech_prob` discounting every word from a doubted segment.
+- **TTS — Piper for English, Hindi and Malayalam; MMS for Tamil and
+  Kannada.** Piper has no voice for those two at all. IndicF5 was tried first
+  and is unusable here: it pins `numpy<=1.26.4` against a Python that needs
+  numpy 2, and installing it broke torch outright.
 
 ### Latency is the whole engineering problem
 
@@ -100,13 +115,17 @@ to a default. A local ASR run produces genuine posteriors, which is the input
 
 ## Order of work
 
-1. **Text loop end to end over WebRTC** — no ASR, no TTS. Prove transport,
-   endpointing and session plumbing while failures are still legible.
-2. **Add ASR.** Now the confidence gate is being fed real numbers for the
-   first time; expect more read-backs, not fewer.
-3. **Add TTS.** The first point at which the thing can be heard.
-4. **Measure.** Replace the harness's simulated word corruption with real
-   audio at 8 kHz. That retires the weakest claim in the README.
+1. ~~Text loop end to end~~ — **done**, as push-to-talk rather than WebRTC.
+2. ~~Add ASR~~ — **done**. The confidence gate is fed real per-word numbers
+   for the first time on the voice path.
+3. ~~Add TTS~~ — **done**, all five languages, Piper where it has a voice and
+   MMS for the two it does not.
+4. **Measure.** Still outstanding, and still the one that matters. Every
+   accuracy figure in the README comes from simulated word corruption; none
+   comes from sound. Replacing that with real 8 kHz telephony audio would
+   retire the weakest claim in the project.
+5. **Real endpointing.** Push-to-talk sidesteps the hard problem honestly, but
+   a phone caller cannot hold a button. Silero VAD plus LiveKit is the path.
 
-Step 4 is the one that matters for the project's own thesis, and it is the
-one most likely to be skipped.
+Step 4 was predicted to be the one most likely to be skipped, and it has
+been.

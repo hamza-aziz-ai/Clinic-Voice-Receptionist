@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 301 passed
+$ python -m pytest -q          # 309 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -40,12 +40,39 @@ python scripts/setup_voice.py
 uvicorn receptionist.api.main:app --app-dir src
 ```
 
-Configuration lives in `.env`, which is gitignored — no `VOICE_ENABLED=1 cmd`
-prefix, which is bash syntax and fails on PowerShell with *"is not recognized
-as the name of a cmdlet"*. A real environment variable still overrides the
-file, so the deployment that exported something on purpose wins over a stale
-local default. Every setting the code reads is documented in `.env.example`,
-and a test fails if one is added without being documented there.
+## Configuration
+
+Everything a deployment changes lives in `.env` — gitignored, so no
+`VOICE_ENABLED=1 cmd` prefix, which is bash syntax and fails on PowerShell
+with *"is not recognized as the name of a cmdlet"*. A real environment
+variable still overrides the file, so a deployment that exported something on
+purpose beats a stale local default.
+
+| Section | What moves |
+|---|---|
+| Clinic | hours, lunch, closure days, chairs, slot granularity, timezone |
+| Safety gate | the four confidence thresholds |
+| Conversation | asks per slot, turns without progress, read-back failures |
+| Voice | Whisper model/device/compute type, Piper voices, TTS device |
+| Understanding | extraction model, `LLM_ALLOW_REMOTE`, context window, keep-alive |
+| Messaging | provider, Telegram/AiSensy credentials |
+| Telephony | Bolna webhook secret and source allowlist |
+
+The clinic hours and the confidence thresholds are the two that mattered most:
+opening a second clinic used to mean editing the scheduler, and the thresholds
+*are* the safety policy, which is an odd thing to bury in source.
+
+What is deliberately **not** configurable is the *set* of threshold keys — a
+slot with no threshold must raise `KeyError`, never inherit a default that
+silently books. A malformed value falls back to the working default rather
+than raising: a typo in `.env` should not stop the clinic answering the phone.
+
+Every setting the code reads is documented in `.env.example`, and a test fails
+if one is added without being documented there. **n8n has its own environment**
+(`RECEPTIONIST_URL`, `BOLNA_WEBHOOK_SECRET`, `OPS_ALERT_URL`,
+`N8N_BLOCK_ENV_ACCESS_IN_NODE=false`) — separate from the service's `.env`,
+and confusing the two is how someone sets the model in n8n and wonders why
+nothing changed.
 
 **All five languages speak.** Piper covers English, Hindi and Malayalam on
 CPU; Meta's MMS-TTS covers Tamil and Kannada, which Piper has no voice for at
@@ -584,13 +611,14 @@ the real request body, so an ordering mistake fails offline.
 - **No real Bolna or AiSensy calls.** Both are integrated against their
   documented payload shapes and sit behind interfaces with mocks. I have no
   accounts, and pretending otherwise would make the tests meaningless. The
-  n8n workflow is generated and valid for import, but has not been run against
-  a live Bolna agent.
-- **No ASR model is actually loaded, and no TTS at all.** The recogniser sits
-  behind an interface with a mock, like Bolna and AiSensy. `IndicConformer`
-  has an adapter written against NeMo's API but has never been run here — no
-  checkpoint, no GPU, no real audio. The model choice above is reasoned from
-  published failure modes, not measured. Degradation is still simulated.
+  n8n workflow has been imported into n8n 2.31.7 and driven through every
+  branch with Bolna-shaped payloads, but never by a live Bolna agent.
+- **ASR and TTS run, but on browser audio only.** Whisper and Piper/MMS are
+  real and measured; what has never been fed through them is *telephony*
+  audio — 8 kHz, μ-law, packet loss. Every accuracy number in this README
+  still comes from simulated word corruption, not sound. `IndicConformer` is
+  written against NeMo's API and has never been run: NeMo needs torch, and
+  every AI4Bharat repository is gated on Hugging Face.
 - **The Bolna agent prompt is not here.** Making the read-backs happen during
   the call is a prompt-engineering job on Bolna's side. This repository assumes
   they happened and verifies it from the transcript; it cannot make them happen.
@@ -600,11 +628,15 @@ the real request body, so an ordering mistake fails offline.
   a symptom instead was met with the same question four times over. That
   transcript is now case `en-06`.
 - **No auth, no persistence.** Sessions are in memory.
-- **Slot extraction is rule-based.** For a closed schema with four fields,
-  rules are inspectable, testable and free — and confidence means something
-  specific rather than being a softmax the model reports about itself. The LLM
-  is a *second* extractor bolted alongside, allowed only to lower confidence;
-  it never produces a value that gets booked.
-- **The cross-check is off by default and, measured on the corpus, currently
-  buys nothing** — see the table above. It has never run against real call
-  audio, and the corpus is ten utterances.
+- **Understanding is the LLM's; the rules are the fallback.** This started as
+  a hand-written slot filler and every extraction bug it had was one of that
+  design's failure modes. The model reads the utterance now. What it does
+  *not* decide is confidence — that still comes from the ASR word scores, so
+  the read-back gate is unchanged.
+- **The extractor's accuracy is not measured on the corpus.** Its numbers here
+  are from a handful of hand-picked utterances, not a scored run. The
+  evaluation harness still scores the *rule* extractor, so the accuracy table
+  above describes the fallback rather than the default path.
+- **The separate cross-check is off, and measured as worthless** — see its
+  table above. Different thing from the extractor: it can only lower
+  confidence and never sets a value.
