@@ -201,8 +201,15 @@ class Settings:
     llm_keep_alive: str = field(
         default_factory=lambda: os.environ.get("LLM_KEEP_ALIVE", "30m")
     )
+    # Bounds the worst case of a turn, so it is a conversational number
+    # rather than a network one. The rules are a competent fallback and
+    # produce an answer instantly; waiting 30 s for a model that may never
+    # reply is strictly worse for the caller than falling back at 10.
+    # Measured cloud latency swings between 2.7 s and 7.2 s, and the provider
+    # returned Internal Server Error for a stretch, so this is not
+    # hypothetical.
     llm_timeout_s: float = field(
-        default_factory=lambda: _float("LLM_TIMEOUT_S", 30.0)
+        default_factory=lambda: _float("LLM_TIMEOUT_S", 10.0)
     )
 
     # Re-transcribe the Bolna recording for per-word confidence. Off by

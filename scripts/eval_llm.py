@@ -36,6 +36,10 @@ from receptionist.nlu.llm_slots import (                        # noqa: E402
 SEVERITIES = (0.0, 0.15, 0.30, 0.50)
 SEED = 11
 
+# Attempts per utterance before conceding the point to the fallback.
+RETRIES = 3
+BACKOFF_S = 4.0
+
 
 def main() -> int:
     print(f"corpus: {len(CASES)} utterances · model: {settings.llm_extraction_model}\n")
@@ -55,11 +59,30 @@ def main() -> int:
         return 1
 
     calls = 0
+    retries = 0
 
     def extractor(text, reference_time, word_confidences):
-        nonlocal calls
-        calls += 1
-        return extract_slots_llm(text, reference_time, model, word_confidences)
+        """Retry, unlike production.
+
+        The live path falls back to the rules the moment the model fails,
+        which is right for a caller: the rules answer instantly and nobody is
+        left listening to silence. Here the goal is the opposite - to measure
+        the model - so a provider hiccup should cost seconds, not a data
+        point silently attributed to the fallback.
+
+        Ollama's cloud returns Internal Server Error in bursts while single
+        calls succeed, which reads as rate limiting rather than an outage, so
+        the backoff is linear and the pacing is deliberate.
+        """
+        nonlocal calls, retries
+        for attempt in range(RETRIES):
+            calls += 1
+            slots = extract_slots_llm(text, reference_time, model, word_confidences)
+            if slots is not None:
+                return slots
+            retries += 1
+            time.sleep(BACKOFF_S * (attempt + 1))
+        return None
 
     header = (
         f"{'ASR err':>7}  {'extractor':<12} {'slots':>7} {'lang':>7} "
@@ -89,7 +112,8 @@ def main() -> int:
 
     elapsed = time.time() - started
     print(f"{calls} model calls in {elapsed:.0f}s"
-          + (f" ({elapsed / calls:.1f}s each)" if calls else ""))
+          + (f" ({elapsed / calls:.1f}s each)" if calls else "")
+          + (f", {retries} retried after a provider error" if retries else ""))
     print("\nSILENT is the number that matters: wrong AND not flagged for "
           "read-back.\nHigher slot accuracy with more silent errors is a worse "
           "system, not a better one.")
