@@ -74,6 +74,12 @@ class EvaluationReport:
     # a disagreement about a value that was right is the cost of running it.
     crosschecks_run: int = 0
     crosschecks_unavailable: int = 0
+    # How many utterances the alternative extractor actually handled, and how
+    # many fell back to the rules. Counted rather than assumed: a run where
+    # the model was unreachable for half the corpus would otherwise be
+    # reported as the model's score, when it is mostly the fallback's.
+    extractor_used: int = 0
+    extractor_unavailable: int = 0
     disagreed_on_wrong: int = 0
     disagreed_on_correct: int = 0
     rescued: int = 0          # was heading for a silent error, now flagged
@@ -166,6 +172,7 @@ def evaluate(
     asr_severity: float = 0.0,
     seed: int = 0,
     crosscheck: Any = None,
+    extractor: Any = None,
 ) -> EvaluationReport:
     """Score the extractor, optionally with the LLM second opinion applied.
 
@@ -174,6 +181,15 @@ def evaluate(
     one measures the *combined* system, which is the only comparison worth
     making - a second extractor scored on its own says nothing about whether
     the thing that books appointments got safer.
+
+    ``extractor`` replaces the rule extractor entirely:
+    ``(text, reference_time, word_confidences) -> SlotSet | None``. Returning
+    None falls back to the rules and is counted, because that is exactly what
+    the live system does when the model is unreachable - and a run where it
+    was down for half the corpus must not be reported as the model's score.
+
+    Until this existed the harness only ever scored the rules, so the accuracy
+    table described the fallback rather than the path that actually runs.
     """
     rng = random.Random(seed)
     report = EvaluationReport()
@@ -190,7 +206,18 @@ def evaluate(
         if detected.language == case.language:
             report.language_correct += 1
 
-        slots = extract_slots(transcript, reference_time, confidences)
+        slots = None
+        if extractor is not None:
+            try:
+                slots = extractor(transcript, reference_time, confidences)
+            except Exception:
+                slots = None
+            if slots is None:
+                report.extractor_unavailable += 1
+            else:
+                report.extractor_used += 1
+        if slots is None:
+            slots = extract_slots(transcript, reference_time, confidences)
 
         # Snapshot before the cross-check so its effect is attributable. A
         # slot already flagged by low ASR confidence was not "rescued" by the

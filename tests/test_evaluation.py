@@ -125,3 +125,64 @@ def test_false_alarms_and_rescues_are_counted_separately():
     assert r.disagreed_on_correct > 0
     assert r.rescued == 0
     assert r.false_alarm_rate == 1.0
+
+
+# ---------------------------------------------------------------- extractor
+def test_the_harness_can_score_an_alternative_extractor():
+    """Until this existed it only ever scored the rules, so the accuracy
+    table described the fallback rather than the path that runs."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+    from receptionist.nlu.slots import SlotSet
+
+    seen = []
+
+    def perfect(text, reference_time, word_confidences):
+        seen.append(text)
+        # Every slot correct and confidently so.
+        slots = SlotSet()
+        return slots
+
+    r = evaluate(CASES, REFERENCE, 0.0, seed=11, extractor=perfect)
+    assert len(seen) == len(CASES)
+    assert r.extractor_used == len(CASES)
+    assert r.extractor_unavailable == 0
+
+
+def test_an_unavailable_extractor_falls_back_to_the_rules_and_is_counted():
+    """A run where the model was down for half the corpus must not be
+    reported as the model's score."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    baseline = evaluate(CASES, REFERENCE, 0.0, seed=11)
+    fell_back = evaluate(CASES, REFERENCE, 0.0, seed=11,
+                         extractor=lambda *a: None)
+
+    assert fell_back.extractor_unavailable == len(CASES)
+    assert fell_back.extractor_used == 0
+    # Identical to the rules, because that is exactly what ran.
+    assert fell_back.by_outcome() == baseline.by_outcome()
+
+
+def test_a_raising_extractor_is_treated_as_unavailable():
+    """A model that errors must degrade to the rules, not lose the case."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    def broken(text, reference_time, word_confidences):
+        raise RuntimeError("ollama down")
+
+    r = evaluate(CASES, REFERENCE, 0.0, seed=11, extractor=broken)
+    assert r.extractor_unavailable == len(CASES)
+    assert r.outcomes, "cases were dropped instead of falling back"
+
+
+def test_the_default_is_still_the_rule_extractor():
+    """No extractor means no network, which is what keeps the suite hermetic."""
+    from receptionist.evaluation.corpus import CASES, REFERENCE
+    from receptionist.evaluation.harness import evaluate
+
+    r = evaluate(CASES, REFERENCE, 0.0, seed=11)
+    assert r.extractor_used == 0
+    assert r.extractor_unavailable == 0

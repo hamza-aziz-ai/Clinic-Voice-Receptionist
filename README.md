@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 309 passed
+$ python -m pytest -q          # 313 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -633,10 +633,15 @@ the real request body, so an ordering mistake fails offline.
   design's failure modes. The model reads the utterance now. What it does
   *not* decide is confidence — that still comes from the ASR word scores, so
   the read-back gate is unchanged.
-- **The extractor's accuracy is not measured on the corpus.** Its numbers here
-  are from a handful of hand-picked utterances, not a scored run. The
-  evaluation harness still scores the *rule* extractor, so the accuracy table
-  above describes the fallback rather than the default path.
+- **The extractor's accuracy is still not measured.** The harness can now
+  score it — `python scripts/eval_llm.py` runs the LLM and the rules over the
+  same corpus at the same severities — but the first run was inconclusive:
+  `gpt-oss:120b-cloud` returned `Internal Server Error` repeatedly and **10 of
+  11 utterances fell back to the rules**, so the numbers it printed were the
+  rules' own. The harness counts and prints that fallback for exactly this
+  reason; without it the run would have reported "LLM: 100% accuracy" and I
+  would have believed it. The measurement needs a healthy provider or a local
+  model that fits the GPU, and neither was available.
 - **The separate cross-check is off, and measured as worthless** — see its
   table above. Different thing from the extractor: it can only lower
   confidence and never sets a value.
