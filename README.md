@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 264 passed
+$ python -m pytest -q          # 273 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -35,9 +35,17 @@ transcribes 6.9 s of audio in 0.28 s (RTF 0.04) and Piper synthesises at
 RTF 0.05. On CPU this is seconds per turn and stops being a conversation.
 
 ```bash
+cp .env.example .env
 python scripts/setup_voice.py
-VOICE_ENABLED=1 uvicorn receptionist.api.main:app --app-dir src
+uvicorn receptionist.api.main:app --app-dir src
 ```
+
+Configuration lives in `.env`, which is gitignored — no `VOICE_ENABLED=1 cmd`
+prefix, which is bash syntax and fails on PowerShell with *"is not recognized
+as the name of a cmdlet"*. A real environment variable still overrides the
+file, so the deployment that exported something on purpose wins over a stale
+local default. Every setting the code reads is documented in `.env.example`,
+and a test fails if one is added without being documented there.
 
 **All five languages speak.** Piper covers English, Hindi and Malayalam on
 CPU; Meta's MMS-TTS covers Tamil and Kannada, which Piper has no voice for at
