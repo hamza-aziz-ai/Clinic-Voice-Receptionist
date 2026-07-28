@@ -119,16 +119,25 @@ class Settings:
         ).strip().lower() in ("1", "true", "yes")
     )
     # LLM as the primary understanding layer, with the rule extractor as the
-    # fallback. Requires a *local* model - the transcript carries the
-    # patient's name, number and complaint, and build_local_model refuses a
-    # remote host rather than trusting this flag.
+    # fallback when it is unreachable.
     llm_extraction_enabled: bool = field(
         default_factory=lambda: os.environ.get(
             "LLM_EXTRACTION_ENABLED", ""
         ).strip().lower() in ("1", "true", "yes")
     )
     llm_extraction_model: str = field(
-        default_factory=lambda: os.environ.get("LLM_EXTRACTION_MODEL", "qwen3:4b")
+        default_factory=lambda: os.environ.get(
+            "LLM_EXTRACTION_MODEL", "gpt-oss:120b-cloud"
+        )
+    )
+    # Transcripts carry patient names, numbers and complaints. Sending them
+    # to a model on someone else's hardware is allowed, but has to be chosen:
+    # build_model raises rather than letting it happen by default. Note that
+    # a "-cloud" tag is remote even though it is served via localhost.
+    llm_allow_remote: bool = field(
+        default_factory=lambda: os.environ.get(
+            "LLM_ALLOW_REMOTE", ""
+        ).strip().lower() in ("1", "true", "yes")
     )
 
     llm_model: str = field(

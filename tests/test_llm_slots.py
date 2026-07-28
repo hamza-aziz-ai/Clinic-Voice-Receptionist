@@ -10,7 +10,8 @@ import pytest
 
 from receptionist.nlu.llm_slots import (
     CallSlots,
-    build_local_model,
+    build_model,
+    is_cloud_model,
     extract_slots_llm,
     is_local,
 )
@@ -40,13 +41,27 @@ def run(text, result, **kw):
 
 
 # ------------------------------------------------- privacy is structural
-def test_a_remote_model_is_refused_outright():
+def test_a_remote_host_is_refused_unless_chosen():
     """The transcript is a patient's name, number and complaint in one
-    sentence. Enforced rather than documented, because the failure is
-    silent: a hosted endpoint would work perfectly and quietly ship every
-    caller's details to a third party."""
-    with pytest.raises(ValueError, match="requires a local model"):
-        build_local_model("qwen3:4b", "https://ollama.com")
+    sentence. Sending it off the machine is allowed, but has to be a
+    decision rather than a default."""
+    with pytest.raises(ValueError, match="leave this machine"):
+        build_model("qwen3:4b", "https://example.com:11434")
+
+
+def test_a_cloud_model_is_remote_even_though_it_is_served_via_localhost():
+    """The hole a URL check misses. Ollama Cloud models are proxied by the
+    local daemon, so the base URL is localhost and the inference is not - a
+    guard reading only the URL would have passed every patient's name to
+    ollama.com while reporting that nothing left the machine."""
+    assert is_cloud_model("gpt-oss:120b-cloud")
+    assert not is_cloud_model("qwen3:4b")
+    with pytest.raises(ValueError, match="cloud model"):
+        build_model("gpt-oss:120b-cloud", "http://localhost:11434")
+
+
+def test_remote_is_permitted_when_explicitly_allowed():
+    build_model("gpt-oss:120b-cloud", "http://localhost:11434", allow_remote=True)
 
 
 def test_localhost_variants_are_recognised():

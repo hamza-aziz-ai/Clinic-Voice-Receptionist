@@ -100,7 +100,7 @@ def _understand_hook():
     if not settings.llm_extraction_enabled:
         return None
 
-    from ..nlu.llm_slots import build_local_model, extract_slots_llm
+    from ..nlu.llm_slots import build_model, extract_slots_llm
 
     model = None
 
@@ -108,15 +108,17 @@ def _understand_hook():
         nonlocal model
         try:
             if model is None:
-                model = build_local_model(
-                    settings.llm_extraction_model, settings.llm_base_url
+                model = build_model(
+                    settings.llm_extraction_model, settings.llm_base_url,
+                    allow_remote=settings.llm_allow_remote,
                 )
             return extract_slots_llm(
                 text, now, model, word_confidences, slots, awaiting
             )
         except Exception:
-            # Includes the refusal to use a remote host. Falling back to the
-            # rules keeps the clinic answering the phone.
+            # Includes the refusal to send transcripts to a remote model
+            # without LLM_ALLOW_REMOTE. Falling back to the rules keeps the
+            # clinic answering the phone either way.
             return None
 
     return hook

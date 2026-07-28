@@ -29,13 +29,18 @@ the span it came from - the same function the rules use - and then passed
 through the same read-back gate. The model can be as clever as it likes about
 meaning and still cannot book something the microphone did not clearly hear.
 
-WHY NO REDACTION HERE
+WHERE THE TRANSCRIPT GOES
 
-The cross-check sends transcripts to a *hosted* model, so names and numbers
-are replaced with surrogates first - which is also why it could only ever
-compare two of the four slots. This path requires a **local** model: nothing
-leaves the machine, so the model sees the real utterance and can extract all
-four. ``require_local`` enforces that rather than trusting configuration.
+The model sees the real utterance - no surrogates - which is what lets it
+extract all four slots rather than the two the redacted cross-check could
+compare. That is a privacy decision, so it is made explicitly:
+``build_model`` refuses a remote model unless ``allow_remote`` is set.
+
+Note what that check has to look at. Ollama Cloud models are served *through
+the local daemon*, so the base URL is localhost and the inference is not. A
+guard reading only the URL would have passed every patient's name to
+ollama.com while reporting that nothing left the machine; the "-cloud" suffix
+on the tag is the honest signal.
 """
 from __future__ import annotations
 
@@ -110,8 +115,13 @@ Times: resolve relative dates against the reference time. If no time of day \
 was spoken, appointment_datetime is null - "Saturday morning" and "tomorrow" \
 are days, not appointments. Never pick an hour the caller did not say.
 
-Procedure: map what they describe onto one code. Callers describe symptoms \
-rather than treatments, and a described symptom is always "checkup" - you \
+Procedure: map what the caller asks for onto one code.
+
+If they NAME a treatment or a named condition below, use that code. "A \
+cleaning", "a filling", "I have a cavity", "root canal" are all named, and a \
+named cavity is a filling, not a check-up.
+
+Only when they describe a SYMPTOM and name nothing is it "checkup". You \
 cannot tell from a phone call whether an aching wisdom tooth needs removing \
 or an X-ray, and booking an extraction on a guess is a clinical decision \
 nobody authorised.
@@ -138,17 +148,48 @@ def is_local(base_url: str) -> bool:
     return any(host in lowered for host in LOCAL_HOSTS)
 
 
-def build_local_model(model: str, base_url: str, timeout_s: float = 20.0) -> Any:
-    """Chat model for extraction. Refuses a remote host.
+def is_cloud_model(model: str) -> bool:
+    """Does this tag run on someone else's hardware?
 
-    Enforced here rather than documented, because the failure is silent: a
-    hosted endpoint would work perfectly and quietly ship patient names to a
-    third party on every turn.
+    THE HOLE THIS CLOSES
+
+    Checking the base URL is not enough, and believing otherwise is worse
+    than not checking at all. Ollama Cloud models are served *through the
+    local daemon*: the base URL is http://localhost:11434, `is_local` returns
+    True, and the inference happens on ollama.com. A guard that reads the URL
+    would have waved every patient's name and phone number through while
+    reporting that nothing left the machine.
+
+    The "-cloud" suffix on the tag is the only honest signal available.
     """
-    if not is_local(base_url):
+    return (model or "").strip().lower().endswith("-cloud")
+
+
+def build_model(
+    model: str,
+    base_url: str,
+    timeout_s: float = 30.0,
+    allow_remote: bool = False,
+) -> Any:
+    """Chat model for extraction.
+
+    Remote inference is permitted but never by accident: a transcript is a
+    patient's name, number and medical complaint in one sentence, and that
+    leaving the building is a decision someone should make on purpose rather
+    than inherit from a default.
+    """
+    remote = is_cloud_model(model) or not is_local(base_url)
+    if remote and not allow_remote:
+        where = "a cloud model" if is_cloud_model(model) else f"a remote host ({base_url})"
         raise ValueError(
-            f"LLM extraction requires a local model; {base_url!r} is remote and "
-            "the transcript contains patient names and phone numbers"
+            f"{model!r} is {where}, so transcripts containing patient names and "
+            "phone numbers would leave this machine. Set LLM_ALLOW_REMOTE=1 to "
+            "accept that, or use a locally-served model."
+        )
+    if remote:
+        log.warning(
+            "LLM extraction is using %s: call transcripts, including patient "
+            "names and phone numbers, are sent off this machine", model,
         )
     from langchain_ollama import ChatOllama
 

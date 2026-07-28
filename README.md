@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 284 passed
+$ python -m pytest -q          # 301 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -115,6 +115,25 @@ day, not an appointment, so the slot stays empty and the agent asks *"What
 time on Saturday 01 August would suit you?"* — keeping the day, asking only
 for the half that is missing. Reading back an invented `10:00 AM` and
 collecting a yes reserves a real chair at an hour nobody chose.
+
+**Understanding is the model's job; confidence is not.** An LLM reads the
+utterance and fills the slots — `gpt-oss:120b-cloud` through LangChain at
+~2.8 s per turn — with the rule extractor as the fallback when it is
+unreachable. That is what lets the agent cope with a bare `"Amna Ansari"`, a
+described symptom, and code-switched speech, none of which a regex handles
+without being told. Every extraction bug this project has had was a missing
+regex, keyword or trigger.
+
+What did **not** move to the model is confidence. It says *what was said*; the
+ASR word confidences say *how sure we are it was heard*, and the read-back
+gate uses those. A decoder is most confident exactly when it is fluently
+wrong, so the model can be as clever as it likes about meaning and still
+cannot book something the microphone did not clearly hear.
+
+Sending transcripts off-machine is opt-in (`LLM_ALLOW_REMOTE=1`), and the
+check looks at the model tag rather than the URL: **Ollama Cloud models are
+served through `localhost`**, so a URL-based guard would have passed every
+patient's name to ollama.com while reporting that nothing left the machine.
 
 **The agent uses what it just asked.** A caller answering "Could I take your
 full name?" with `"Amna Ansari"` — no "my name is" in front of it — used to
