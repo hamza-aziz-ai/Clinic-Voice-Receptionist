@@ -118,6 +118,19 @@ class Settings:
             "LLM_CROSSCHECK_ENABLED", ""
         ).strip().lower() in ("1", "true", "yes")
     )
+    # LLM as the primary understanding layer, with the rule extractor as the
+    # fallback. Requires a *local* model - the transcript carries the
+    # patient's name, number and complaint, and build_local_model refuses a
+    # remote host rather than trusting this flag.
+    llm_extraction_enabled: bool = field(
+        default_factory=lambda: os.environ.get(
+            "LLM_EXTRACTION_ENABLED", ""
+        ).strip().lower() in ("1", "true", "yes")
+    )
+    llm_extraction_model: str = field(
+        default_factory=lambda: os.environ.get("LLM_EXTRACTION_MODEL", "qwen3:4b")
+    )
+
     llm_model: str = field(
         default_factory=lambda: os.environ.get("LLM_MODEL", "gpt-oss:120b-cloud")
     )

@@ -90,6 +90,38 @@ def _crosscheck_hook():
     return hook
 
 
+def _understand_hook():
+    """LLM-primary slot extraction, or None to leave the rules in charge.
+
+    Built lazily on first turn: loading a model at import would make a cold
+    Ollama a startup failure for the whole API, and a text-only deployment
+    should not pay for it.
+    """
+    if not settings.llm_extraction_enabled:
+        return None
+
+    from ..nlu.llm_slots import build_local_model, extract_slots_llm
+
+    model = None
+
+    def hook(text, now, word_confidences, slots, awaiting):
+        nonlocal model
+        try:
+            if model is None:
+                model = build_local_model(
+                    settings.llm_extraction_model, settings.llm_base_url
+                )
+            return extract_slots_llm(
+                text, now, model, word_confidences, slots, awaiting
+            )
+        except Exception:
+            # Includes the refusal to use a remote host. Falling back to the
+            # rules keeps the clinic answering the phone.
+            return None
+
+    return hook
+
+
 def _build_transcriber():
     """The recogniser, or None when re-transcription is switched off.
 
@@ -109,6 +141,7 @@ handler = CallHandler(
     calendar, messaging,
     clinic_name=settings.clinic_name, review_link=settings.review_link,
     crosscheck=_crosscheck_hook(),
+    understand=_understand_hook(),
 )
 SESSIONS: dict[str, CallSession] = {}
 

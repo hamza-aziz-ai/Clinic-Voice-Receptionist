@@ -199,6 +199,7 @@ class CallHandler:
         clinic_name: str = "Al Noor Dental",
         review_link: str = "https://g.page/r/alnoor-dental/review",
         crosscheck: Any = None,
+        understand: Any = None,
     ) -> None:
         self.calendar = calendar
         self.messaging = messaging
@@ -209,6 +210,11 @@ class CallHandler:
         # opinion about LangChain, and so the default remains a system with no
         # second extractor at all.
         self.crosscheck = crosscheck
+        # Callable(text, now, word_confidences, slots, awaiting) -> SlotSet or
+        # None. The primary understanding layer when present; returning None
+        # hands the turn to the rule extractor, so an unreachable model costs
+        # nuance rather than the ability to answer the phone.
+        self.understand = understand
 
     # ------------------------------------------------------------------
     def start(self, caller_number: str = "") -> CallSession:
@@ -255,7 +261,22 @@ class CallHandler:
         session.collect_turns += 1
         before = sum(1 for s in session.slots.all_slots() if s.filled)
 
-        session.slots = extract_slots(text, now, word_confidences, session.slots)
+        # The model understands the sentence; the rules are the fallback for
+        # when it is unreachable. That is the opposite of how this started,
+        # and it is the right way round: every extraction bug this system has
+        # had was a missing regex, a missing keyword or a missing trigger.
+        #
+        # Confidence does not come from the model either way - see
+        # nlu/llm_slots. It says what was said; the audio says how sure we are.
+        understood = None
+        if self.understand is not None:
+            understood = self.understand(
+                text, now, word_confidences, session.slots, session.awaiting
+            )
+        if understood is not None:
+            session.slots = understood
+        else:
+            session.slots = extract_slots(text, now, word_confidences, session.slots)
 
         # The agent knows what it just asked for. A bare "Amna Ansari" has no
         # "my name is" in front of it and matched nothing, so the agent asked
