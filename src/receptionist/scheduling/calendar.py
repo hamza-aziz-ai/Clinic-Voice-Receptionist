@@ -36,7 +36,11 @@ class ClinicHours:
 
     def is_open(self, when: datetime, duration_min: int) -> tuple[bool, str]:
         if when.weekday() in self.closed_weekdays:
-            return False, f"clinic is closed on {when:%A}"
+            # Spoken verbatim, so it carries the article and the plural the
+            # other refusals here do. The call flow catches a closed day well
+            # before booking now, but this is still what a caller hears if one
+            # reaches the calendar by another route.
+            return False, f"the clinic is closed on {when:%A}s"
         end = (when + timedelta(minutes=duration_min)).time()
         # These strings are spoken to the caller verbatim by the call flow, so
         # they carry the half of the day. "closing at 20:00" is unambiguous on

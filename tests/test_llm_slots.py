@@ -193,12 +193,60 @@ def test_a_phrase_with_no_hour_is_still_not_an_appointment():
     assert slots.appointment_time.value is None
 
 
+def test_the_day_survives_when_only_the_hour_is_missing():
+    """Verbatim from a real session. Only the rule extractor set
+    `pending_date`, so once the model became primary the day was dropped and
+    the agent asked three times:
+
+        "Friday morning" -> "Which day works for you, and roughly what time?"
+        "Friday morning" -> "Could you give me a day and a time?"
+
+    It had understood the day the first time. Worse, the closed-day reply is
+    gated on `pending_date`, so the caller was not told the clinic shuts on
+    Fridays until after they had also given a procedure.
+    """
+    slots = run("Friday morning",
+                CallSlots(appointment_datetime=None,
+                          spoken_time_phrase="Friday morning"))
+    assert slots.appointment_time.value is None
+    assert slots.appointment_time.pending_date == datetime(2026, 7, 31).date()
+
+
+def test_an_hour_the_caller_did_not_say_is_not_taken_from_the_model():
+    """The model is told to null a vague time and sometimes fills one in
+    anyway. "Friday morning" is a day either way - a yes to a read-back of
+    10:00 AM reserves a real chair at an hour nobody chose."""
+    slots = run("Friday morning",
+                CallSlots(appointment_datetime="2026-07-31T10:00",
+                          spoken_time_phrase="Friday morning"))
+    assert slots.appointment_time.value is None
+    assert slots.appointment_time.pending_date == datetime(2026, 7, 31).date()
+
+
 # ------------------------------------------------- refusals and fallback
 def test_a_vague_time_is_left_unset():
     """"Saturday morning" is a day, not an appointment. The model is told to
     return null and the value is not invented downstream either."""
     slots = run("Saturday morning", CallSlots(appointment_datetime=None))
     assert slots.appointment_time.value is None
+
+
+def test_the_digits_are_assembled_from_the_words_not_from_the_model():
+    """Measured: "zero five five one two three four five six seven" came back
+    from the model as 05551234567 - one 5 too many, because a run of repeated
+    digit words is where a decoder loses count. The normaliser reads the same
+    words as +971551234567 without difficulty."""
+    slots = run("Call me on zero five five one two three four five six seven",
+                CallSlots(phone="05551234567",
+                          spoken_phone_phrase="zero five five one two three "
+                                              "four five six seven"))
+    assert slots.phone.value == "+971551234567"
+
+
+def test_the_model_s_digits_are_used_when_there_are_no_words_to_read():
+    """The split must not lose a number the model got right on its own."""
+    slots = run("my number is 0501234567", CallSlots(phone="0501234567"))
+    assert slots.phone.value == "+971501234567"
 
 
 def test_an_unparseable_phone_is_dropped_rather_than_stored():

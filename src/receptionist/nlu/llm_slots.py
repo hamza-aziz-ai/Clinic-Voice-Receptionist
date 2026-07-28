@@ -90,6 +90,16 @@ class CallSlots(BaseModel):
     phone: str | None = Field(
         None, description="Phone number, digits as spoken. Null if not said."
     )
+    # Same reason as `spoken_time_phrase`: assembling a digit run is not what
+    # the model is good at. See `_apply_phone`.
+    spoken_phone_phrase: str | None = Field(
+        None,
+        description=(
+            "The words the caller used for their number, copied verbatim and "
+            "untranslated - 'zero five five one two three four five six "
+            "seven', 'double nine eight seven'. Null if they gave no number."
+        ),
+    )
     appointment_datetime: str | None = Field(
         None,
         description=(
@@ -122,6 +132,11 @@ mixes an Indic language with English clinical terms in one sentence.
 
 Extract only what the caller actually said. Never invent a value; null is \
 always allowed and is the right answer when something was not stated.
+
+Numbers: give both fields. spoken_phone_phrase is the caller's own words for \
+their number, copied out verbatim - do not convert them to digits, do not \
+correct them, do not drop a repeated word. The digits are assembled \
+elsewhere.
 
 Names: take the caller's name however it arrives. "My name is Amna Ansari", \
 "Amna Ansari", and "this is Amna" all give a name. A reply that is a \
@@ -346,12 +361,34 @@ def _apply_name(slots, result, transcript, word_confidences) -> None:
 
 
 def _apply_phone(slots, result, transcript, word_confidences) -> None:
+    """Let the model find the number; let the normaliser assemble the digits.
+
+    THE FAILURE THIS DOCUMENTS. "zero five five one two three four five six
+    seven" came back as 05551234567 - one 5 too many, because a run of
+    repeated digit words is exactly where a decoder loses count. That is an
+    unusable number for a clinic, and `normalise_phone` reads the same words
+    as +971551234567 without difficulty.
+
+    So the digits are assembled from the caller's own words, and the model's
+    own attempt is only used when there are no words to work from. This is the
+    same split as `_apply_time`, for the same reason: what the caller meant is
+    the model's job, and mechanical transcription is not.
+    """
     raw = (result.phone or "").strip()
-    if not raw:
-        return
-    parsed = normalise_phone(raw)
+    phrase = (result.spoken_phone_phrase or "").strip()
+
+    parsed = None
+    if phrase:
+        spoken = normalise_phone(phrase)
+        # An identified country is the signal the digits assembled into a real
+        # number rather than a plausible-length string.
+        if spoken and spoken.country != "UNKNOWN":
+            parsed = spoken
+    if parsed is None and raw:
+        parsed = normalise_phone(raw)
     if not parsed:
         return
+    raw = phrase or raw
     conf = (_score(raw, transcript, word_confidences) - parsed.confidence_penalty) * 0.95
     candidate = Slot("phone", raw_text=raw, value=parsed.e164,
                      confidence=max(0.0, min(1.0, conf)), source="llm",
@@ -415,11 +452,38 @@ def _apply_time(slots, result, transcript, reference_time, word_confidences) -> 
             model_when = None
 
     # Resolve the caller's own words, independently of the model's answer.
-    rule_when: datetime | None = None
-    if phrase:
-        parsed = normalise_datetime(phrase, reference_time)
-        if parsed and not parsed.time_was_vague:
-            rule_when = parsed.when
+    parsed = normalise_datetime(phrase, reference_time) if phrase else None
+
+    if parsed and parsed.time_was_vague:
+        # A day with no hour in it. The slot stays empty so the collect loop
+        # asks for the time, but the day is carried on the slot so it can ask
+        # the specific question - and so the closed-day check upstream, which
+        # is gated on `pending_date`, fires now rather than after the whole
+        # call has been collected.
+        #
+        # THE FAILURE THIS DOCUMENTS. Only the rule extractor set this. Once
+        # the model became primary the day was silently dropped, and a real
+        # session went: "Friday morning" - "Which day works for you, and
+        # roughly what time?" - "Friday morning" - "Could you give me a day
+        # and a time?". Three times, having understood it the first time. The
+        # clinic is shut on Fridays, and the caller was not told until after
+        # they had also given a procedure.
+        #
+        # The rule is believed over the model here on purpose: it read the
+        # caller's own words, and "no hour was spoken" is exactly the claim it
+        # is reliable about. An hour the model supplies for "Friday morning"
+        # is one the caller never said.
+        candidate = Slot(
+            "appointment_time", raw_text=phrase, value=None,
+            confidence=0.0, source="date_only",
+            notes=["day understood; time of day not stated"],
+            pending_date=parsed.when.date(),
+        )
+        if _keep(slots.appointment_time, candidate):
+            slots.appointment_time = candidate
+        return
+
+    rule_when: datetime | None = parsed.when if parsed else None
 
     notes: list[str] = []
     disputed = False

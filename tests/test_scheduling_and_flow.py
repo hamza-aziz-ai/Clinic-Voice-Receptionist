@@ -445,6 +445,37 @@ def test_a_closed_day_is_refused_before_asking_what_time_suits():
     assert handler.calendar.active() == []
 
 
+def test_a_closed_day_with_an_hour_on_it_is_refused_just_as_early():
+    """The check read only `pending_date`, so it fired for "Friday morning"
+    and stayed silent for "Friday at 10 AM". The caller who gave a complete
+    answer was the one who got no warning: the agent took the time, went on to
+    ask what they were coming in for, and only then refused the day.
+
+    Verbatim from a real session. The day being unbookable has nothing to do
+    with whether an hour arrived with it.
+    """
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Amna Ansari", "yes", "0501234567", "yes"])
+    reply = handler.handle_utterance(session, "Friday at 10 AM", TUE)
+    assert "closed on Friday" in reply
+    assert "come in for" not in reply
+    # And it is gone, not left to come round the loop again.
+    assert session.slots.appointment_time.value is None
+    assert handler.calendar.active() == []
+
+
+def test_a_closed_day_is_never_read_back_for_confirmation():
+    """Asking "Friday 31 July at 10 AM, shall I book that?" is the same bug in
+    a different hat - a yes to it cannot be honoured."""
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Amna Ansari", "yes", "0501234567", "yes"])
+    reply = handler.handle_utterance(session, "Friday at 10 AM", TUE)
+    assert "shall I book" not in reply.lower()
+    assert "is that correct" not in reply.lower()
+
+
 def test_the_closed_day_reply_offers_a_day_that_is_open():
     handler = _handler()
     session = handler.start()

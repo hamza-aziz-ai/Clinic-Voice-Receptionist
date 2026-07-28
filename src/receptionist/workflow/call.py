@@ -309,6 +309,13 @@ class CallHandler:
         if session.collect_turns > MAX_COLLECT_TURNS:
             return self._escalate(session, "call ran too long without completing")
 
+        # Before anything is read back or asked for. A day the clinic will not
+        # accept is settled the moment it is understood - whether the caller
+        # gave an hour with it or not.
+        closed = self._closed_day_reply(session, session.slots.appointment_time, now)
+        if closed:
+            return closed
+
         pending = session.slots.pending_confirmation
         if pending:
             session.state = "confirm"
@@ -334,9 +341,6 @@ class CallHandler:
 
             prompt = self._ask_for(name, attempt)
             if name == "appointment_time" and missing[0].pending_date:
-                closed = self._closed_day_reply(session, missing[0], now)
-                if closed:
-                    return closed
                 prompt = self._ask_time_on(missing[0].pending_date, attempt)
             if attempt > 1 and sounds_confused(text):
                 prompt = f"Sorry, let me put that differently. {prompt}"
@@ -494,8 +498,16 @@ class CallHandler:
         6 pm, agent then refuses because the clinic is closed on Fridays. The
         agent had the opening hours in hand the whole time and still asked the
         caller to choose an hour on a day it would not accept.
+
+        Which is why this reads the *value* as well as `pending_date`. It only
+        looked at the latter, so it fired for "Friday morning" and stayed
+        silent for "Friday at 10 AM" - the caller who gave a complete answer
+        was the one who got no warning, went on to supply a procedure, and was
+        refused at booking. The day being unbookable has nothing to do with
+        whether an hour came with it.
         """
-        day = slot.pending_date
+        day = slot.pending_date or (
+            slot.value.date() if slot.filled and slot.value else None)
         if day is None:
             return None
         # Any duration will do - a closed day is closed for all of them.
@@ -503,7 +515,12 @@ class CallHandler:
         if probe.weekday() not in self.calendar.hours.closed_weekdays:
             return None
 
+        # Clear it outright. Leaving a filled value here would send the same
+        # closed day round the loop again on the next utterance.
         slot.pending_date = None
+        slot.value = None
+        slot.confidence = 0.0
+        slot.confirmed = False
         session.asks["appointment_time"] = 0
         session.awaiting = "appointment_time"
         alternatives = self.calendar.suggest(
