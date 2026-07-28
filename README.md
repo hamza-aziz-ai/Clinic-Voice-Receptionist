@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 273 passed
+$ python -m pytest -q          # 284 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -115,6 +115,14 @@ day, not an appointment, so the slot stays empty and the agent asks *"What
 time on Saturday 01 August would suit you?"* — keeping the day, asking only
 for the half that is missing. Reading back an invented `10:00 AM` and
 collecting a yes reserves a real chair at an hour nobody chose.
+
+**The agent uses what it just asked.** A caller answering "Could I take your
+full name?" with `"Amna Ansari"` — no "my name is" in front of it — used to
+match nothing, so the agent asked three more times and escalated someone who
+had answered correctly twice. A bare reply is now read as the slot that was
+requested, at a discounted confidence so it is read back rather than booked
+on. And a caller who volunteers the *next* detail mid-read-back is making
+progress, not failing a confirmation.
 
 Read-backs are per-slot deliberately. "Did I get all that right?" after a
 four-field summary produces a yes that means nothing — a caller cannot hold

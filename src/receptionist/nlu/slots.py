@@ -351,6 +351,82 @@ def extract_slots(
     return slots
 
 
+# A value the agent inferred from its own question rather than one the caller
+# announced. Scored below the plain-statement confidence so it is read back:
+# "Amna Ansari" answering "what is your name?" is almost certainly a name,
+# and "almost certainly" is exactly what the read-back gate exists for.
+CONTEXT_CONFIDENCE_FACTOR = 0.88
+
+# Replies that answer the question without being the value. Interpreting
+# "yes" as a patient called Yes is worse than asking again.
+_NON_ANSWERS = {
+    "yes", "yeah", "yep", "no", "nope", "ok", "okay", "sure", "please",
+    "correct", "right", "wrong", "thanks", "thank you", "hi", "hello",
+}
+
+
+def extract_for_slot(
+    text: str,
+    slot_name: str,
+    reference_time: datetime,
+    word_confidences: dict[str, float] | None = None,
+) -> Slot | None:
+    """Read a bare reply as the slot the agent just asked for.
+
+    THE BUG THIS FIXES
+
+    ``extract_slots`` only finds a name behind a trigger - "my name is",
+    "this is", "I'm". A caller answering "Could I take your full name
+    please?" with "Amna Ansari" matched nothing, so the agent asked again,
+    and again, and then escalated. The caller had answered correctly twice.
+
+    The agent knows what it just asked for. Using that is not a guess, it is
+    the most ordinary fact available about the turn, and ignoring it made the
+    system deaf to the plainest possible answer.
+
+    Confidence is discounted and the value is therefore read back. The caller
+    said a name-shaped thing in reply to a question about names; that is
+    strong evidence, not proof.
+    """
+    stripped = (text or "").strip()
+    if not stripped or stripped.lower().strip(".,!?") in _NON_ANSWERS:
+        return None
+
+    conf = _asr_confidence(word_confidences, stripped) * CONTEXT_CONFIDENCE_FACTOR
+
+    if slot_name == "patient_name":
+        # A bare date is a far likelier reply to a mis-ordered conversation
+        # than a patient named "Friday Evening".
+        if normalise_datetime(stripped, reference_time):
+            return None
+        parsed = normalise_name(stripped)
+        if not parsed:
+            return None
+        return Slot("patient_name", raw_text=stripped, value=parsed,
+                    confidence=max(0.0, min(1.0, conf * 0.90)), source="answer",
+                    notes=["given in answer to a direct question"])
+
+    if slot_name == "phone":
+        parsed = normalise_phone(stripped)
+        if not parsed:
+            return None
+        return Slot("phone", raw_text=stripped, value=parsed.e164,
+                    confidence=max(0.0, min(1.0, (conf - parsed.confidence_penalty) * 0.95)),
+                    source="answer",
+                    notes=[f"country {parsed.country}",
+                           "given in answer to a direct question"])
+
+    if slot_name == "appointment_time":
+        parsed = normalise_datetime(stripped, reference_time)
+        if not parsed or parsed.time_was_vague:
+            return None
+        return Slot("appointment_time", raw_text=stripped, value=parsed.when,
+                    confidence=max(0.0, min(1.0, conf)), source="answer",
+                    notes=["given in answer to a direct question"])
+
+    return None
+
+
 def readback_prompt(slot: Slot, language: str = "en") -> str:
     """The question the agent asks to confirm a low-confidence slot.
 

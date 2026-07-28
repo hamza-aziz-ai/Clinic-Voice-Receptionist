@@ -378,3 +378,132 @@ def test_no_spoken_string_leaves_an_hour_bare():
         re.IGNORECASE)
     offenders = [s for s in spoken if bare.search(date_label.sub("", s))]
     assert not offenders, f"hour spoken without am/pm: {offenders}"
+
+
+# ------------------------------------------------- second real transcript
+# A call that failed four different ways: the agent asked for a name three
+# times while the caller kept giving it, offered a time on a day the clinic
+# is shut, then escalated someone who was steadily making progress.
+TUE = datetime(2026, 7, 28, 10, 0)
+
+
+def test_a_bare_name_answers_the_question_that_asked_for_it():
+    """"Amna Ansari" has no "my name is" in front of it, so it matched
+    nothing - and the agent asked again, and again, and escalated a caller
+    who had answered correctly twice."""
+    from receptionist.nlu.slots import extract_for_slot
+    slot = extract_for_slot("Amna Ansari", "patient_name", TUE)
+    assert slot.value == "Amna Ansari"
+    # Inferred from context, not announced - so it is read back, never booked
+    # on silently.
+    assert slot.needs_confirmation
+
+
+def test_a_bare_answer_is_only_used_for_the_slot_that_was_asked():
+    handler = _handler()
+    session = handler.start()
+    reply = handler.handle_utterance(session, "Hi there", TUE)
+    assert "name" in reply.lower()
+    assert session.awaiting == "patient_name"
+
+    handler.handle_utterance(session, "Amna Ansari", TUE)
+    assert session.slots.patient_name.value == "Amna Ansari"
+
+
+def test_a_yes_is_never_read_as_a_patient_name():
+    from receptionist.nlu.slots import extract_for_slot
+    for reply in ("yes", "Yes", "ok", "sure", "thanks", "hello"):
+        assert extract_for_slot(reply, "patient_name", TUE) is None
+
+
+def test_a_date_reply_is_not_read_as_a_patient_name():
+    """A patient named "Friday Evening" is less likely than a caller
+    answering the wrong question."""
+    from receptionist.nlu.slots import extract_for_slot
+    assert extract_for_slot("Friday evening", "patient_name", TUE) is None
+
+
+def test_an_explicit_statement_still_beats_the_context_guess():
+    handler = _handler()
+    session = handler.start()
+    handler.handle_utterance(session, "Hi there", TUE)
+    handler.handle_utterance(session, "my name is Priya Menon", TUE)
+    assert session.slots.patient_name.value == "Priya Menon"
+    assert session.slots.patient_name.source == "asr"
+
+
+def test_a_closed_day_is_refused_before_asking_what_time_suits():
+    """The agent said "we're open 9 until 8, what time on Friday works?",
+    took 6 pm, then refused because the clinic is closed on Fridays. It had
+    the opening hours the whole time."""
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Amna Ansari", "yes", "0501234567", "yes"])
+    reply = handler.handle_utterance(session, "Friday evening", TUE)
+    assert "closed on Friday" in reply
+    assert "What time on Friday" not in reply
+    assert handler.calendar.active() == []
+
+
+def test_the_closed_day_reply_offers_a_day_that_is_open():
+    handler = _handler()
+    session = handler.start()
+    _run(handler, session, ["my name is Amna Ansari", "yes", "0501234567", "yes"])
+    reply = handler.handle_utterance(session, "Friday evening", TUE)
+    assert "Saturday" in reply or "other day" in reply
+    assert "Friday 31" not in reply
+
+
+def test_a_value_offered_during_a_readback_is_not_a_failed_confirmation():
+    """Asked to confirm a name, the caller gave their phone number - and got
+    "Sorry, was that a yes or a no?" twice before the call escalated. People
+    do not stay on the agent's script."""
+    handler = _handler()
+    session = handler.start()
+    handler.handle_utterance(session, "Hi there", TUE)
+    handler.handle_utterance(session, "Amna Ansari", TUE)
+    assert session.state == "confirm"
+
+    reply = handler.handle_utterance(session, "+91 8860560626", TUE)
+    assert "yes or a no" not in reply
+    assert session.slots.phone.value == "+918860560626"
+    assert session.readback_failures == 0
+    # The name is still unconfirmed - nothing bypassed the gate.
+    assert not session.slots.patient_name.confirmed
+
+
+def test_a_genuinely_ambiguous_reply_is_still_a_failed_confirmation():
+    handler = _handler()
+    session = handler.start()
+    handler.handle_utterance(session, "Hi there", TUE)
+    handler.handle_utterance(session, "Amna Ansari", TUE)
+    reply = handler.handle_utterance(session, "hmm maybe", TUE)
+    assert "yes or a no" in reply
+    assert session.readback_failures == 1
+
+
+def test_progress_resets_the_escalation_budget():
+    """A caller steadily supplying details must not run out of turns; one
+    going in circles should."""
+    handler = _handler()
+    session = handler.start()
+    for turn in ("Hi there", "Amna Ansari", "yes", "+91 8860560626", "yes"):
+        handler.handle_utterance(session, turn, TUE)
+    assert session.state != "escalated"
+    assert session.turns_without_progress == 0
+
+
+def test_the_whole_reported_call_now_books():
+    handler = _handler()
+    session = handler.start("+918860560626")
+    _run(handler, session, [
+        "Hi there", "Amna Ansari", "Yes that is correct", "+91 8860560626",
+        "Yes that is correct", "Friday evening", "Thursday 6:00 PM",
+        "Having a cavity in my molar tooth", "yes please",
+    ])
+    assert session.state == "ended", session.escalation_reason
+    booking = handler.calendar.get(session.booking_id)
+    assert booking.patient_name == "Amna Ansari"
+    assert booking.procedure == "filling"
+    assert booking.start == datetime(2026, 7, 30, 18, 0)   # Thursday, not Friday
+    assert booking.phone == "+918860560626"
