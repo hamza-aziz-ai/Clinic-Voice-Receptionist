@@ -191,25 +191,40 @@ class Settings:
     # and offloads most of it to the CPU. A system prompt and one utterance
     # fit in 2048 with room to spare.
     llm_num_ctx: int = field(default_factory=lambda: _int("LLM_NUM_CTX", 2048))
-    # A four-field object is small; the cap stops a rambling model holding the
-    # turn hostage.
+    # The cap stops a rambling model holding the turn hostage - but it has to
+    # pay for the model's *hidden reasoning* as well as the answer, and that is
+    # not optional on a reasoning model.
+    #
+    # THE FAILURE THIS DOCUMENTS. This was 256, sized against the four-field
+    # object the model actually returns. gpt-oss ignores `think: false` and
+    # reasons anyway; the chain of thought spent the whole 256-token budget, so
+    # generation stopped before a single token of the answer. The result was an
+    # empty completion - no content, no tool call, no error - which
+    # `extract_slots_llm` reads as "model answered unusably" and silently falls
+    # back to the rules. Extraction looked like a 9-in-11 provider outage and
+    # was a one-line budget bug here. Measured over the corpus: 256 -> 0/4,
+    # 1024 -> 4/4, 2048 -> 4/4. -1 (uncapped) is rejected by Ollama Cloud
+    # outright, so the timeout, not an unbounded generation, is the guard.
     llm_num_predict: int = field(
-        default_factory=lambda: _int("LLM_NUM_PREDICT", 256)
+        default_factory=lambda: _int("LLM_NUM_PREDICT", 1024)
     )
     # Keep the model resident between turns; reloading it per utterance would
     # dominate the latency budget.
     llm_keep_alive: str = field(
         default_factory=lambda: os.environ.get("LLM_KEEP_ALIVE", "30m")
     )
-    # Bounds the worst case of a turn, so it is a conversational number
-    # rather than a network one. The rules are a competent fallback and
-    # produce an answer instantly; waiting 30 s for a model that may never
-    # reply is strictly worse for the caller than falling back at 10.
-    # Measured cloud latency swings between 2.7 s and 7.2 s, and the provider
-    # returned Internal Server Error for a stretch, so this is not
-    # hypothetical.
+    # Bounds the worst case of a turn, so it is a conversational number rather
+    # than a network one. The rules are a competent fallback and produce an
+    # answer instantly; waiting 30 s for a model that may never reply is
+    # strictly worse for the caller than falling back sooner.
+    #
+    # 20 s, not the 10 s this was. A full reasoning pass takes ~5.3 s and the
+    # cloud endpoint swings, but the old number was worse than tight: it was
+    # calibrated while every call was truncating at 256 tokens and returning
+    # empty in under 3 s, so it was fitted to a broken response rather than a
+    # working one. See `llm_num_predict`.
     llm_timeout_s: float = field(
-        default_factory=lambda: _float("LLM_TIMEOUT_S", 10.0)
+        default_factory=lambda: _float("LLM_TIMEOUT_S", 20.0)
     )
 
     # Re-transcribe the Bolna recording for per-word confidence. Off by

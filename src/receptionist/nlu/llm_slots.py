@@ -50,7 +50,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .normalize import normalise_datetime, normalise_name, normalise_phone
+from .normalize import (
+    WEEKDAYS,
+    normalise_datetime,
+    normalise_name,
+    normalise_phone,
+)
 from .slots import (
     CONFIRMATION_THRESHOLDS,
     PROCEDURES,
@@ -93,6 +98,17 @@ class CallSlots(BaseModel):
             "'Saturday morning' is a day, not a time, so that is null."
         ),
     )
+    # Asked for separately so the resolution can be checked rather than
+    # trusted. See `_apply_time`: the model finds the phrase reliably and
+    # resolves it to a calendar date unreliably.
+    spoken_time_phrase: str | None = Field(
+        None,
+        description=(
+            "The words the caller actually used for the day and time, copied "
+            "verbatim and untranslated - 'Saturday at 2 pm', 'tomorrow at 10', "
+            "'next Monday morning'. Null if they mentioned no time at all."
+        ),
+    )
     procedure: Literal[
         "cleaning", "extraction", "root_canal", "filling",
         "checkup", "whitening", "braces", NOT_STATED,
@@ -111,9 +127,12 @@ Names: take the caller's name however it arrives. "My name is Amna Ansari", \
 "Amna Ansari", and "this is Amna" all give a name. A reply that is a \
 greeting, a confirmation, a day of the week or a symptom is NOT a name.
 
-Times: resolve relative dates against the reference time. If no time of day \
-was spoken, appointment_datetime is null - "Saturday morning" and "tomorrow" \
-are days, not appointments. Never pick an hour the caller did not say.
+Times: give both fields. spoken_time_phrase is the caller's own words for the \
+day and time, copied out verbatim and never translated or resolved. \
+appointment_datetime is that phrase resolved against the reference time. If \
+no time of day was spoken, appointment_datetime is null - "Saturday morning" \
+and "tomorrow" are days, not appointments - but still copy the phrase. Never \
+pick an hour the caller did not say.
 
 Procedure: map what the caller asks for onto one code.
 
@@ -171,7 +190,7 @@ def build_model(
     timeout_s: float = 30.0,
     allow_remote: bool = False,
     num_ctx: int = 2048,
-    num_predict: int = 256,
+    num_predict: int = 1024,
     keep_alive: str = "30m",
 ) -> Any:
     """Chat model for extraction.
@@ -205,6 +224,9 @@ def build_model(
         # sentence, which is not a conversation. There is nothing to reason
         # about here - the utterance is one line and the schema is four
         # fields.
+        #
+        # It is a request, not a guarantee: gpt-oss reasons regardless of
+        # `think: false`. See `num_predict` below for what that cost.
         reasoning=False,
         # THE SINGLE BIGGEST LATENCY FACTOR HERE.
         #
@@ -217,8 +239,25 @@ def build_model(
         # is generous, keeps the whole model resident in VRAM, and is the
         # difference between a conversation and a timeout.
         num_ctx=num_ctx,
-        # A four-field object is small. Without a cap a model that starts
-        # rambling holds the whole turn hostage.
+        # Caps generation so a model that starts rambling cannot hold the whole
+        # turn hostage.
+        #
+        # THE FAILURE THIS DOCUMENTS. This was 256, sized against the
+        # four-field object the model returns. But the budget pays for the
+        # hidden reasoning first, and `reasoning=False` above does not stop
+        # gpt-oss reasoning. The chain of thought spent all 256 tokens and
+        # generation stopped before the answer began, so the call came back
+        # with no content, no tool call and no error - which
+        # `extract_slots_llm` correctly reads as "answered unusably" and
+        # silently falls back to the rules.
+        #
+        # The symptom was 9 of 11 corpus utterances extracting by rule while
+        # the model appeared to be down. It was not: `ollama run` was fast and
+        # healthy the whole time, because a chat session sets no cap. Measured
+        # over the corpus, tools on: 256 -> 0/4, 1024 -> 4/4, 2048 -> 4/4.
+        #
+        # -1 (uncapped) is not the answer either - Ollama Cloud rejects it in
+        # 0.3 s. The timeout is what bounds a runaway generation.
         num_predict=num_predict,
         # Keep it resident between turns; reloading 2.5 GB per utterance
         # would dominate the latency budget.
@@ -321,23 +360,111 @@ def _apply_phone(slots, result, transcript, word_confidences) -> None:
         slots.phone = candidate
 
 
+def _named_weekday(phrase: str) -> int | None:
+    """Which weekday the caller said, if they said one.
+
+    Matched on the English names only, which is what the model is asked to
+    copy out; a phrase with two weekdays in it is not a fact about the answer,
+    so it returns None rather than picking one.
+    """
+    lowered = (phrase or "").lower()
+    hits = {idx for name, idx in WEEKDAYS.items() if name in lowered}
+    return hits.pop() if len(hits) == 1 else None
+
+
 def _apply_time(slots, result, transcript, reference_time, word_confidences) -> None:
+    """Trust the model to read the phrase; check it on the arithmetic.
+
+    THE FAILURE THIS DOCUMENTS. The model answered "Saturday at 2 pm" with
+    2026-07-31T14:00. That is a Friday. Right time, right intent, wrong day,
+    at confidence 0.942 - because confidence here is scored from the
+    acoustics, and the acoustics were perfect. The caller was heard correctly
+    and would have been booked into the wrong day without being asked.
+
+    Acoustic confidence cannot catch this by construction: it measures whether
+    the microphone heard "Saturday", not whether "Saturday" was then counted
+    onto the right square of the calendar. So the calendar arithmetic is taken
+    away from the model. `normalise_datetime` is deterministic, tested, and
+    the one part of this that a rule does better - while finding the time
+    phrase inside a code-mixed Tamil-English sentence is the part it does
+    worse. Each side does what it is good at.
+
+    Neither side is simply trusted over the other, because neither deserves
+    it. `normalise_datetime` does not return None on a phrase it only half
+    understands - it reads "the day after next Thursday at 4" as plain
+    Thursday and is quietly a week out. Preferring it wholesale would trade
+    one wrong day for another.
+
+    So the arbiter is the caller. If they named a weekday, that weekday is a
+    fact about the answer, and whichever candidate lands on it wins. When both
+    land on it, or neither does, or no weekday was named, the disagreement is
+    unresolved: the model's reading is kept and confidence is pushed under the
+    gate so the caller is read back to. A disagreement is exactly the evidence
+    that one of them is wrong - invariant 5, ambiguity is not consent.
+    """
     raw = (result.appointment_datetime or "").strip()
-    if not raw:
+    phrase = (result.spoken_time_phrase or "").strip()
+    if not raw and not phrase:
         return
-    try:
-        when = datetime.fromisoformat(raw.replace("Z", ""))
-    except ValueError:
-        parsed = normalise_datetime(raw, reference_time)
-        if not parsed or parsed.time_was_vague:
-            return
-        when = parsed.when
-    conf = _score(raw, transcript, word_confidences)
-    notes = []
+
+    model_when: datetime | None = None
+    if raw:
+        try:
+            model_when = datetime.fromisoformat(raw.replace("Z", ""))
+        except ValueError:
+            model_when = None
+
+    # Resolve the caller's own words, independently of the model's answer.
+    rule_when: datetime | None = None
+    if phrase:
+        parsed = normalise_datetime(phrase, reference_time)
+        if parsed and not parsed.time_was_vague:
+            rule_when = parsed.when
+
+    notes: list[str] = []
+    disputed = False
+    if model_when and rule_when:
+        if model_when == rule_when:
+            when = model_when
+        else:
+            named = _named_weekday(phrase)
+            fits_model = named is not None and model_when.weekday() == named
+            fits_rule = named is not None and rule_when.weekday() == named
+            if fits_model != fits_rule:
+                # One of them lands on the day the caller actually said.
+                when = model_when if fits_model else rule_when
+                loser = rule_when if fits_model else model_when
+                notes.append(
+                    f"{loser:%a %d %b} is not the {phrase.strip()!r} the "
+                    f"caller asked for"
+                )
+            else:
+                when = model_when
+                disputed = True
+                notes.append(
+                    f"model read {phrase!r} as {model_when:%a %d %b %H:%M}, "
+                    f"the calendar makes it {rule_when:%a %d %b %H:%M}"
+                )
+    elif rule_when:
+        when = rule_when
+    elif model_when:
+        when = model_when
+    else:
+        # A phrase with no time of day - "Saturday morning" - is a day, not an
+        # appointment. Inventing an hour here is the day-of-month-as-hour bug
+        # in a new costume.
+        return
+
+    conf = _score(phrase or raw, transcript, word_confidences)
+    if disputed:
+        # Under every threshold in CONFIRMATION_THRESHOLDS, so it is read back
+        # rather than booked. Deliberately not zero: the slot is filled and the
+        # value is probably right, it just may not be believed.
+        conf = min(conf, 0.40)
     if when < reference_time:
         conf *= 0.5
         notes.append("resolved to a past time")
-    candidate = Slot("appointment_time", raw_text=raw, value=when,
+    candidate = Slot("appointment_time", raw_text=phrase or raw, value=when,
                      confidence=max(0.0, min(1.0, conf)), source="llm", notes=notes)
     if _keep(slots.appointment_time, candidate):
         slots.appointment_time = candidate

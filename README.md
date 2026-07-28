@@ -145,7 +145,7 @@ collecting a yes reserves a real chair at an hour nobody chose.
 
 **Understanding is the model's job; confidence is not.** An LLM reads the
 utterance and fills the slots — `gpt-oss:120b-cloud` through LangChain at
-~2.8 s per turn — with the rule extractor as the fallback when it is
+~5 s per turn — with the rule extractor as the fallback when it is
 unreachable. That is what lets the agent cope with a bare `"Amna Ansari"`, a
 described symptom, and code-switched speech, none of which a regex handles
 without being told. Every extraction bug this project has had was a missing
@@ -156,6 +156,17 @@ ASR word confidences say *how sure we are it was heard*, and the read-back
 gate uses those. A decoder is most confident exactly when it is fluently
 wrong, so the model can be as clever as it likes about meaning and still
 cannot book something the microphone did not clearly hear.
+
+**Nor did the calendar arithmetic.** The model answered *"Saturday at 2 pm"*
+with `2026-07-31T14:00` — a Friday — at confidence `0.942`, because the
+acoustics were clean and the acoustics are what score this slot. Nothing
+downstream could have caught it: the caller was heard perfectly and would
+have been booked into the wrong day without being asked. So the model is
+asked for the caller's words as well as its answer, the words are resolved
+deterministically, and when the two disagree the weekday the caller actually
+named decides. If nothing decides it, the slot is read back rather than
+booked. Neither side is trusted outright — the deterministic parser reads
+*"the day after next Thursday"* as plain Thursday and is quietly a week out.
 
 Sending transcripts off-machine is opt-in (`LLM_ALLOW_REMOTE=1`), and the
 check looks at the model tag rather than the URL: **Ollama Cloud models are
@@ -633,15 +644,34 @@ the real request body, so an ordering mistake fails offline.
   design's failure modes. The model reads the utterance now. What it does
   *not* decide is confidence — that still comes from the ASR word scores, so
   the read-back gate is unchanged.
-- **The extractor's accuracy is still not measured.** The harness can now
-  score it — `python scripts/eval_llm.py` runs the LLM and the rules over the
-  same corpus at the same severities — but the first run was inconclusive:
-  `gpt-oss:120b-cloud` returned `Internal Server Error` repeatedly and **10 of
-  11 utterances fell back to the rules**, so the numbers it printed were the
-  rules' own. The harness counts and prints that fallback for exactly this
-  reason; without it the run would have reported "LLM: 100% accuracy" and I
-  would have believed it. The measurement needs a healthy provider or a local
-  model that fits the GPU, and neither was available.
+- **The extractor is measured now, and it ties the rules.** `python
+  scripts/eval_llm.py` runs both over the same corpus at the same severities:
+
+  | ASR error | rules | LLM | silent (rules / LLM) | fell back |
+  |---|---|---|---|---|
+  | 0%  | 100.0% | 100.0% | 0 / 0 | 0/11 |
+  | 15% |  82.1% |  82.1% | 0 / 0 | 0/11 |
+  | 30% |  74.4% |  74.4% | 0 / 0 | 0/11 |
+  | 50% |  74.4% |  74.4% | 0 / 0 | 0/11 |
+
+  Identical accuracy, no silent errors either way, at ~5 s and a few more
+  read-backs per run. **That is not evidence the LLM is unnecessary — it is
+  evidence the corpus cannot answer the question.** These eleven utterances
+  are what the rules were built and debugged against; it is their home
+  ground, and the cases that motivated the model (a bare `"Amna Ansari"`,
+  `"I am having ache…"` read as a name) are the ones nobody wrote down. The
+  honest reading is that the LLM costs nothing in accuracy or safety on the
+  rules' own test, and the test does not reach what it was hired for.
+- **The first run of that harness reported a provider outage that was my
+  bug.** 9 of 11 utterances fell back and I blamed `Internal Server Error`.
+  `num_predict` was 256, sized against the four-field object the model
+  returns — but the budget pays for the model's hidden reasoning first, and
+  `gpt-oss` reasons regardless of `think: false`. The chain of thought spent
+  the whole 256 tokens and generation stopped before the answer began, so the
+  call returned an empty completion: no content, no tool call, no error.
+  Measured: 256 → 0/4, 1024 → 4/4. The fallback counter is what made this
+  findable at all — without it the run would have printed "LLM: 100%
+  accuracy" and I would have believed it.
 - **The separate cross-check is off, and measured as worthless** — see its
   table above. Different thing from the extractor: it can only lower
   confidence and never sets a value.

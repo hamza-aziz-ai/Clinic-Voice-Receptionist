@@ -131,6 +131,68 @@ def test_a_past_time_is_penalised():
     assert "past" in " ".join(slots.appointment_time.notes)
 
 
+# ------------------------------------------- the model does not do arithmetic
+def test_the_calendar_overrules_the_model_on_which_day_saturday_is():
+    """Measured, not hypothetical: the model answered "Saturday at 2 pm" with
+    2026-07-31 - a Friday - at confidence 0.942, because the acoustics were
+    clean and acoustic confidence is what scores this slot. Nothing downstream
+    could catch it: the caller was heard perfectly and would have been booked
+    into the wrong day without being asked.
+
+    So the day is counted by `normalise_datetime`, which is deterministic, and
+    the model is only asked which words the caller used.
+    """
+    slots = run("Saturday at 2 pm",
+                CallSlots(appointment_datetime="2026-07-31T14:00",
+                          spoken_time_phrase="Saturday at 2 pm"),
+                word_confidences={"saturday": 0.99, "2": 0.99, "pm": 0.99})
+    assert slots.appointment_time.value == datetime(2026, 8, 1, 14, 0)
+
+
+def test_a_disagreement_neither_side_wins_is_read_back_rather_than_booked():
+    """No weekday was named, so nothing arbitrates. Invariant 5: the
+    disagreement is itself the evidence that one of them is wrong."""
+    slots = run("tomorrow at 2 pm",
+                CallSlots(appointment_datetime="2026-07-30T14:00",
+                          spoken_time_phrase="tomorrow at 2 pm"),
+                word_confidences={"tomorrow": 0.99, "2": 0.99, "pm": 0.99})
+    assert slots.appointment_time.needs_confirmation
+    assert not slots.bookable
+
+
+def test_agreement_is_left_alone():
+    """The check must not tax the common case, or it becomes a caller asked to
+    confirm every appointment they ever booked correctly."""
+    slots = run("Saturday at 2 pm",
+                CallSlots(appointment_datetime="2026-08-01T14:00",
+                          spoken_time_phrase="Saturday at 2 pm"),
+                word_confidences={"saturday": 0.99, "2": 0.99, "pm": 0.99})
+    assert slots.appointment_time.value == datetime(2026, 8, 1, 14, 0)
+    assert not slots.appointment_time.needs_confirmation
+
+
+def test_the_model_wins_when_the_rule_is_the_one_that_is_wrong():
+    """The split cuts both ways, which is why neither side is simply trusted.
+    `normalise_datetime` does not decline a phrase it half understands - it
+    reads "the day after next Thursday" as plain Thursday and is a week out.
+    Both land on a Thursday, so the weekday cannot arbitrate and the model's
+    reading is kept - but the caller is still asked."""
+    slots = run("the day after next Thursday at 4",
+                CallSlots(appointment_datetime="2026-08-06T16:00",
+                          spoken_time_phrase="the day after next Thursday at 4"))
+    assert slots.appointment_time.value == datetime(2026, 8, 6, 16, 0)
+    assert slots.appointment_time.needs_confirmation
+
+
+def test_a_phrase_with_no_hour_is_still_not_an_appointment():
+    """"Saturday morning" resolves to a day. Inventing an hour for it is the
+    day-of-month-as-hour bug in a new costume."""
+    slots = run("Saturday morning",
+                CallSlots(appointment_datetime=None,
+                          spoken_time_phrase="Saturday morning"))
+    assert slots.appointment_time.value is None
+
+
 # ------------------------------------------------- refusals and fallback
 def test_a_vague_time_is_left_unset():
     """"Saturday morning" is a day, not an appointment. The model is told to
