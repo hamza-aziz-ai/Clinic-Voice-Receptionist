@@ -102,3 +102,89 @@ def test_the_example_holds_no_real_secret():
         key, _, value = line.partition("=")
         if any(word in key for word in ("SECRET", "TOKEN", "KEY")):
             assert not value.strip(), f"{key} has a value in a committed file"
+
+
+# ------------------------------------------------- configuration is external
+# Settings reads os.environ in its default_factory, so a fresh Settings()
+# picks up monkeypatched values. Reloading the config module instead would
+# mint a new `settings` object while api.main still holds the old one, which
+# quietly breaks every other test that patches it.
+def test_clinic_hours_come_from_the_environment(monkeypatch):
+    """Opening hours are the most clinic-specific thing here and were
+    hardcoded in the scheduler, so a second clinic meant editing code."""
+    from receptionist.config import Settings
+
+    monkeypatch.setenv("CLINIC_OPEN_TIME", "08:30")
+    monkeypatch.setenv("CLINIC_CLOSE_TIME", "17:00")
+    monkeypatch.setenv("CLINIC_CLOSED_WEEKDAYS", "5,6")
+    monkeypatch.setenv("CLINIC_CHAIRS", "7")
+    s = Settings()
+
+    assert (s.clinic_open_time.hour, s.clinic_open_time.minute) == (8, 30)
+    assert s.clinic_close_time.hour == 17
+    assert s.clinic_closed_weekdays == (5, 6)
+    assert s.clinic_chairs == 7
+
+
+def test_llm_and_voice_tuning_come_from_the_environment(monkeypatch):
+    from receptionist.config import Settings
+
+    monkeypatch.setenv("LLM_NUM_CTX", "8192")
+    monkeypatch.setenv("LLM_KEEP_ALIVE", "5m")
+    monkeypatch.setenv("WHISPER_COMPUTE_TYPE", "int8")
+    monkeypatch.setenv("TTS_DEVICE", "cpu")
+    s = Settings()
+
+    assert s.llm_num_ctx == 8192
+    assert s.llm_keep_alive == "5m"
+    assert s.whisper_compute_type == "int8"
+    assert s.tts_device == "cpu"
+
+
+def test_a_malformed_value_falls_back_instead_of_crashing(monkeypatch):
+    """A typo in .env must not stop the clinic answering the phone."""
+    from receptionist.config import Settings
+
+    monkeypatch.setenv("CLINIC_CHAIRS", "lots")
+    monkeypatch.setenv("CLINIC_OPEN_TIME", "not-a-time")
+    monkeypatch.setenv("CLINIC_CLOSED_WEEKDAYS", "banana")
+    monkeypatch.setenv("LLM_NUM_CTX", "huge")
+    s = Settings()
+
+    assert s.clinic_chairs == 2
+    assert s.clinic_open_time.hour == 9
+    assert s.clinic_closed_weekdays == (4,)
+    assert s.llm_num_ctx == 2048
+
+
+def test_confidence_thresholds_are_tunable(monkeypatch):
+    """The safety policy of the system, previously editable only in source."""
+    from receptionist.nlu.slots import _threshold
+
+    monkeypatch.setenv("THRESHOLD_PHONE", "0.99")
+    assert _threshold("THRESHOLD_PHONE", 0.92) == 0.99
+    monkeypatch.setenv("THRESHOLD_PHONE", "not-a-number")
+    assert _threshold("THRESHOLD_PHONE", 0.92) == 0.92
+
+
+def test_a_slot_without_a_threshold_still_raises():
+    """Invariant: a missing key is a deliberate KeyError, not a default that
+    silently books. There is no way to add a slot from the environment."""
+    from receptionist.nlu.slots import CONFIRMATION_THRESHOLDS, Slot
+
+    assert set(CONFIRMATION_THRESHOLDS) == {
+        "phone", "appointment_time", "patient_name", "procedure"}
+    rogue = Slot("patient_name", value="x", confidence=0.5)
+    rogue.name = "invented_slot"
+    with pytest.raises(KeyError):
+        _ = rogue.needs_confirmation
+
+
+def test_the_calendar_is_built_from_settings():
+    """Wired, not merely available: the app must actually use the values."""
+    from receptionist.api.main import calendar
+    from receptionist.config import settings
+
+    assert calendar.chairs == settings.clinic_chairs
+    assert calendar.hours.open_time == settings.clinic_open_time
+    assert calendar.hours.closed_weekdays == settings.clinic_closed_weekdays

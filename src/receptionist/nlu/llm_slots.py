@@ -170,6 +170,9 @@ def build_model(
     base_url: str,
     timeout_s: float = 30.0,
     allow_remote: bool = False,
+    num_ctx: int = 2048,
+    num_predict: int = 256,
+    keep_alive: str = "30m",
 ) -> Any:
     """Chat model for extraction.
 
@@ -213,13 +216,13 @@ def build_model(
         # The prompt here is a system message and one utterance. 2048 tokens
         # is generous, keeps the whole model resident in VRAM, and is the
         # difference between a conversation and a timeout.
-        num_ctx=2048,
+        num_ctx=num_ctx,
         # A four-field object is small. Without a cap a model that starts
         # rambling holds the whole turn hostage.
-        num_predict=256,
+        num_predict=num_predict,
         # Keep it resident between turns; reloading 2.5 GB per utterance
         # would dominate the latency budget.
-        keep_alive="30m",
+        keep_alive=keep_alive,
         client_kwargs={"timeout": timeout_s},
     )
 

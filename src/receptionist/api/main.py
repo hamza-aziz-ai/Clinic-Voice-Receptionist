@@ -41,7 +41,19 @@ app = FastAPI(
     ),
 )
 
-calendar = Calendar(hours=ClinicHours(), chairs=2)
+# Every clinic-specific number comes from the environment. Hardcoded, a
+# second clinic meant editing the scheduler.
+calendar = Calendar(
+    hours=ClinicHours(
+        open_time=settings.clinic_open_time,
+        close_time=settings.clinic_close_time,
+        closed_weekdays=settings.clinic_closed_weekdays,
+        lunch_start=settings.clinic_lunch_start,
+        lunch_end=settings.clinic_lunch_end,
+        slot_granularity_min=settings.clinic_slot_granularity_min,
+    ),
+    chairs=settings.clinic_chairs,
+)
 # The mock builds the same AiSensy request body the live connector posts, so
 # a parameter-order or missing-campaign mistake fails here and in the demo,
 # not only against a real account nobody running this repository has.
@@ -110,7 +122,11 @@ def _understand_hook():
             if model is None:
                 model = build_model(
                     settings.llm_extraction_model, settings.llm_base_url,
+                    timeout_s=settings.llm_timeout_s,
                     allow_remote=settings.llm_allow_remote,
+                    num_ctx=settings.llm_num_ctx,
+                    num_predict=settings.llm_num_predict,
+                    keep_alive=settings.llm_keep_alive,
                 )
             return extract_slots_llm(
                 text, now, model, word_confidences, slots, awaiting
@@ -246,14 +262,15 @@ def _voice():
         from ..tts.piper_tts import PiperSpeaker
 
         _TRANSCRIBER = WhisperTranscriber(
-            settings.whisper_model, device=settings.whisper_device
+            settings.whisper_model, device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
         )
         # Piper for the three languages it covers - fast, on CPU, better
         # sounding - and MMS for Tamil and Kannada, which Piper has no voice
         # for at all. Neither model alone speaks all five.
         _SPEAKER = CompositeSpeaker(
             PiperSpeaker(settings.piper_voice_dir),
-            MMSSpeaker(device=settings.whisper_device),
+            MMSSpeaker(device=settings.tts_device),
         )
     return _TRANSCRIBER, _SPEAKER
 

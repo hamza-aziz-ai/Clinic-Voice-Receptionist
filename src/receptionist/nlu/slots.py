@@ -39,11 +39,28 @@ SlotName = Literal["patient_name", "phone", "appointment_time", "procedure"]
 # Confidence floors below which a slot must be confirmed aloud before use.
 # Phone is highest because a single wrong digit is silently catastrophic:
 # the number remains valid, so nothing downstream can detect the error.
+def _threshold(name: str, default: float) -> float:
+    """Read one threshold from the environment.
+
+    Read here rather than imported from ``config`` because config imports the
+    telephony package, and slots is below both - a threshold is policy, not a
+    reason to invert the dependency graph.
+    """
+    import os
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+# Tunable per deployment, but the four keys are fixed. A slot with no
+# threshold must raise KeyError rather than inherit a default, which is why
+# there is no way to add one from the environment - see the module docstring.
 CONFIRMATION_THRESHOLDS: dict[str, float] = {
-    "phone": 0.92,
-    "appointment_time": 0.85,
-    "patient_name": 0.75,
-    "procedure": 0.70,
+    "phone": _threshold("THRESHOLD_PHONE", 0.92),
+    "appointment_time": _threshold("THRESHOLD_APPOINTMENT_TIME", 0.85),
+    "patient_name": _threshold("THRESHOLD_PATIENT_NAME", 0.75),
+    "procedure": _threshold("THRESHOLD_PROCEDURE", 0.70),
 }
 
 PROCEDURES: dict[str, tuple[str, ...]] = {

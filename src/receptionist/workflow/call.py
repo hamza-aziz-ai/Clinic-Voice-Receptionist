@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
+from ..config import settings as _settings
 from ..messaging.base import MessagingConnector, OutboundMessage, render_template
 from ..nlu.crosscheck import CrossCheckReport, apply_crosscheck
 from ..nlu.language import LANGUAGE_NAMES, detect_language
@@ -35,8 +36,10 @@ CallState = Literal[
     "book", "notify", "ended", "escalated",
 ]
 
-MAX_READBACK_FAILURES = 2
-MAX_COLLECT_TURNS = 20
+# Conversation limits, tunable per deployment via .env - a clinic with
+# patient callers may want more patience than one with trade callers.
+MAX_READBACK_FAILURES = _settings.max_readback_failures
+MAX_COLLECT_TURNS = 20        # runaway guard only; progress is what matters
 
 # How many times one slot may be asked for before handing off. Repeating an
 # identical question is the failure mode this exists to stop: a real call went
@@ -49,12 +52,12 @@ MAX_COLLECT_TURNS = 20
 #
 # A caller who did not understand a sentence will not understand the same
 # sentence. Each attempt is worded differently and the third hands to a human.
-MAX_ASKS_PER_SLOT = 3
+MAX_ASKS_PER_SLOT = _settings.max_asks_per_slot
 
 # Escalate on turns that add nothing, not on turns elapsed. A caller steadily
 # supplying details should never run out of budget; one going in circles
 # should. The absolute cap below is only a runaway guard.
-MAX_TURNS_WITHOUT_PROGRESS = 4
+MAX_TURNS_WITHOUT_PROGRESS = _settings.max_turns_without_progress
 
 # The caller telling us the agent is not making sense. Worth detecting
 # explicitly: the reply is otherwise indistinguishable from silence, and the

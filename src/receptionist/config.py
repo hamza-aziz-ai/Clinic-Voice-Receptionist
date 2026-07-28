@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 
 from .telephony.bolna import BOLNA_WEBHOOK_SOURCE_IPS
@@ -67,6 +68,51 @@ def _csv(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def _int(name: str, default: int) -> int:
+    """Fall back rather than crash on a typo.
+
+    A malformed number in .env should not stop the clinic answering the
+    phone, and the default is always a working value.
+    """
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _time(name: str, default: str) -> time:
+    """HH:MM from the environment."""
+    raw = (os.environ.get(name, "").strip() or default)
+    try:
+        hour, _, minute = raw.partition(":")
+        return time(int(hour), int(minute or 0))
+    except ValueError:
+        hour, _, minute = default.partition(":")
+        return time(int(hour), int(minute or 0))
+
+
+def _weekdays(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    """Monday=0 ... Sunday=6, comma separated."""
+    raw = _csv(name)
+    if not raw:
+        return default
+    try:
+        return tuple(int(v) for v in raw if 0 <= int(v) <= 6)
+    except ValueError:
+        return default
+
+
 @dataclass
 class Settings:
     # Shared secret Bolna sends back to us in a header. Bolna signs nothing,
@@ -114,16 +160,12 @@ class Settings:
     # a deployment that has not thought about sending transcripts to a remote
     # model should not start doing it because a package was installed.
     llm_crosscheck_enabled: bool = field(
-        default_factory=lambda: os.environ.get(
-            "LLM_CROSSCHECK_ENABLED", ""
-        ).strip().lower() in ("1", "true", "yes")
+        default_factory=lambda: _flag("LLM_CROSSCHECK_ENABLED")
     )
     # LLM as the primary understanding layer, with the rule extractor as the
     # fallback when it is unreachable.
     llm_extraction_enabled: bool = field(
-        default_factory=lambda: os.environ.get(
-            "LLM_EXTRACTION_ENABLED", ""
-        ).strip().lower() in ("1", "true", "yes")
+        default_factory=lambda: _flag("LLM_EXTRACTION_ENABLED")
     )
     llm_extraction_model: str = field(
         default_factory=lambda: os.environ.get(
@@ -135,9 +177,7 @@ class Settings:
     # build_model raises rather than letting it happen by default. Note that
     # a "-cloud" tag is remote even though it is served via localhost.
     llm_allow_remote: bool = field(
-        default_factory=lambda: os.environ.get(
-            "LLM_ALLOW_REMOTE", ""
-        ).strip().lower() in ("1", "true", "yes")
+        default_factory=lambda: _flag("LLM_ALLOW_REMOTE")
     )
 
     llm_model: str = field(
@@ -146,21 +186,35 @@ class Settings:
     llm_base_url: str = field(
         default_factory=lambda: os.environ.get("LLM_BASE_URL", "http://localhost:11434")
     )
+    # Context window. The single biggest latency factor for a local model:
+    # Ollama defaults qwen3 to 131072, which inflates a 2.5 GB model to 23 GB
+    # and offloads most of it to the CPU. A system prompt and one utterance
+    # fit in 2048 with room to spare.
+    llm_num_ctx: int = field(default_factory=lambda: _int("LLM_NUM_CTX", 2048))
+    # A four-field object is small; the cap stops a rambling model holding the
+    # turn hostage.
+    llm_num_predict: int = field(
+        default_factory=lambda: _int("LLM_NUM_PREDICT", 256)
+    )
+    # Keep the model resident between turns; reloading it per utterance would
+    # dominate the latency budget.
+    llm_keep_alive: str = field(
+        default_factory=lambda: os.environ.get("LLM_KEEP_ALIVE", "30m")
+    )
+    llm_timeout_s: float = field(
+        default_factory=lambda: _float("LLM_TIMEOUT_S", 30.0)
+    )
 
     # Re-transcribe the Bolna recording for per-word confidence. Off by
     # default: it needs a model checkpoint on disk, and a deployment without
     # one must keep working rather than fail to answer the phone.
     asr_enabled: bool = field(
-        default_factory=lambda: os.environ.get(
-            "ASR_ENABLED", ""
-        ).strip().lower() in ("1", "true", "yes")
+        default_factory=lambda: _flag("ASR_ENABLED")
     )
     # Browser push-to-talk: local Whisper in, local Piper out. Off by default
     # because it needs model files on disk and a GPU to be conversational.
     voice_enabled: bool = field(
-        default_factory=lambda: os.environ.get(
-            "VOICE_ENABLED", ""
-        ).strip().lower() in ("1", "true", "yes")
+        default_factory=lambda: _flag("VOICE_ENABLED")
     )
     whisper_model: str = field(
         default_factory=lambda: os.environ.get("WHISPER_MODEL", "small")
@@ -168,14 +222,89 @@ class Settings:
     whisper_device: str = field(
         default_factory=lambda: os.environ.get("WHISPER_DEVICE", "cuda")
     )
+    # float16 on a GPU, int8 on CPU. Mismatched to the device it either
+    # refuses to load or runs far slower than it should.
+    whisper_compute_type: str = field(
+        default_factory=lambda: os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
+    )
     piper_voice_dir: str = field(
         default_factory=lambda: os.environ.get("PIPER_VOICE_DIR", "models/piper")
+    )
+    # MMS covers Tamil and Kannada, which Piper has no voice for. Separate
+    # from the Whisper device so the two can be split across CPU and GPU when
+    # VRAM is tight.
+    tts_device: str = field(
+        default_factory=lambda: os.environ.get("TTS_DEVICE", "cuda")
     )
 
     asr_model: str = field(
         default_factory=lambda: os.environ.get(
             "ASR_MODEL", "ai4bharat/indic-conformer-600m-multilingual"
         )
+    )
+
+    # ---------------------------------------------------------------- hours
+    # Opening hours are the most clinic-specific thing in the system and were
+    # hardcoded in ClinicHours, so a second clinic meant editing the
+    # scheduler. Weekdays are Monday=0; the default closure is Friday, the
+    # UAE weekend anchor.
+    clinic_open_time: time = field(
+        default_factory=lambda: _time("CLINIC_OPEN_TIME", "09:00")
+    )
+    clinic_close_time: time = field(
+        default_factory=lambda: _time("CLINIC_CLOSE_TIME", "20:00")
+    )
+    clinic_closed_weekdays: tuple[int, ...] = field(
+        default_factory=lambda: _weekdays("CLINIC_CLOSED_WEEKDAYS", (4,))
+    )
+    clinic_lunch_start: time = field(
+        default_factory=lambda: _time("CLINIC_LUNCH_START", "13:00")
+    )
+    clinic_lunch_end: time = field(
+        default_factory=lambda: _time("CLINIC_LUNCH_END", "14:00")
+    )
+    clinic_slot_granularity_min: int = field(
+        default_factory=lambda: _int("CLINIC_SLOT_GRANULARITY_MIN", 15)
+    )
+    # How many patients can be treated at once. Drives the booking conflict
+    # check, so it is the difference between a full calendar and a
+    # double-booked chair.
+    clinic_chairs: int = field(default_factory=lambda: _int("CLINIC_CHAIRS", 2))
+
+    # ------------------------------------------------------------ thresholds
+    # The safety policy of the whole system, and previously only editable in
+    # source. Below these a value is read back to the caller instead of
+    # booked. Phone is highest because one wrong digit is still a valid
+    # number, so nothing downstream can catch it.
+    #
+    # There is deliberately no way to add a slot here from the environment: a
+    # slot with no threshold must raise, not inherit a default that silently
+    # books. See nlu/slots.CONFIRMATION_THRESHOLDS.
+    threshold_phone: float = field(
+        default_factory=lambda: _float("THRESHOLD_PHONE", 0.92)
+    )
+    threshold_appointment_time: float = field(
+        default_factory=lambda: _float("THRESHOLD_APPOINTMENT_TIME", 0.85)
+    )
+    threshold_patient_name: float = field(
+        default_factory=lambda: _float("THRESHOLD_PATIENT_NAME", 0.75)
+    )
+    threshold_procedure: float = field(
+        default_factory=lambda: _float("THRESHOLD_PROCEDURE", 0.70)
+    )
+
+    # ---------------------------------------------------------- conversation
+    # How many times one slot may be asked before handing to a human, and how
+    # many consecutive turns may add nothing. Progress, not elapsed turns, is
+    # what decides whether a call is going anywhere.
+    max_asks_per_slot: int = field(
+        default_factory=lambda: _int("MAX_ASKS_PER_SLOT", 3)
+    )
+    max_turns_without_progress: int = field(
+        default_factory=lambda: _int("MAX_TURNS_WITHOUT_PROGRESS", 4)
+    )
+    max_readback_failures: int = field(
+        default_factory=lambda: _int("MAX_READBACK_FAILURES", 2)
     )
 
     clinic_name: str = field(
