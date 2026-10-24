@@ -16,6 +16,12 @@ those turns back through the gate means an in-call confirmation confirms the
 slot for exactly the reason it should, and a call where the agent never asked
 ends with the slot still unconfirmed and nothing booked.
 
+THE CONTRACT WITH BOLNA'S AGENT. A replayed answer only counts when the agent
+turn before it is this system's own read-back for a pending slot, word for
+word (``readback_prompt``). A bare "Is that correct?" names no value, so a yes
+to it confirms nothing, and the call lands in the callback queue. The Bolna
+agent prompt has to read values back in exactly these words.
+
 Bolna's ``extracted_data`` is not thrown away. It supplies the confidence
 ceiling, which can only lower a slot. It is treated as evidence about the
 audio, never as a value to book on.
@@ -111,10 +117,22 @@ def ingest_execution(
     # word was heard, which is the honest value and not a failure.
     word_confidences = _transcribe_caller(execution, transcriber, session)
 
-    for turn in caller_turns:
+    # Each caller turn carries the agent turn just before it, so a yes or no is
+    # bound to the question Bolna's agent actually asked rather than to the
+    # slot this replay happens to be reading back. Consumed once: two caller
+    # turns in a row do not both answer the same question. "" (never None)
+    # when there was none, so a replay can never take the live path.
+    agent_said = ""
+    for turn in execution.turns:
+        if turn.speaker == "assistant":
+            agent_said = turn.text
+            continue
         if session.state in ("ended", "escalated"):
             break
-        handler.handle_utterance(session, turn, now, word_confidences=word_confidences)
+        handler.handle_utterance(session, turn.text, now,
+                                 word_confidences=word_confidences,
+                                 agent_said=agent_said)
+        agent_said = ""
 
     if session.state == "escalated":
         return IngestResult(

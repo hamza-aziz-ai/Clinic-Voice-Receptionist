@@ -23,7 +23,7 @@ BOOKED_CALL = (
     "assistant: Thank you for calling.\n"
     "user: my name is Priya Menon I need a cleaning tomorrow at 3 pm "
     "my number is 0501234567\n"
-    "assistant: Let me confirm your number. Is that correct?\n"
+    "assistant: Let me confirm your number: plus 971 501 234 567. Is that correct?\n"
     "user: yes correct\n"
 )
 
@@ -178,3 +178,35 @@ def test_narrowband_warning_reaches_the_session():
     result = ingest_execution(parse_execution(payload()), handler(), now=NOW,
                               transcriber=transcriber)
     assert any("narrowband" in n for n in result.session.transcript_notes)
+
+
+# ------------------------------------------- IndicConformer cannot isolate a channel
+def test_indic_conformer_refuses_a_recording_it_cannot_isolate(monkeypatch):
+    """The AudioRef names the caller's channel but nothing extracts it, so
+    the whole recording - agent read-backs included - would be scored as
+    the caller. Refused before any model is loaded."""
+    from receptionist.asr.indic_conformer import IndicConformerTranscriber
+
+    t = IndicConformerTranscriber()
+    monkeypatch.setattr(t, "_load", lambda: pytest.fail("model loaded"))
+    for audio in (AudioRef(uri=RECORDING),                      # stereo, caller on 0
+                  AudioRef(uri=RECORDING, channels=1, caller_channel=None)):
+        assert t.transcribe(audio) is None
+
+
+def test_indic_conformer_still_accepts_single_speaker_audio(monkeypatch):
+    from receptionist.asr import indic_conformer
+    from receptionist.asr.indic_conformer import IndicConformerTranscriber
+
+    class FakeNemo:
+        def transcribe(self, uris, **kw):
+            self.uris = uris
+            return []
+
+    fake = FakeNemo()
+    t = IndicConformerTranscriber()
+    monkeypatch.setattr(t, "_load", lambda: fake)
+    monkeypatch.setattr(indic_conformer, "_to_transcript", lambda *a, **k: "transcript")
+    assert t.transcribe(AudioRef(uri="turn.webm", channels=1, caller_channel=None,
+                                 single_speaker=True)) == "transcript"
+    assert fake.uris == ["turn.webm"]

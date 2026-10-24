@@ -321,3 +321,71 @@ def test_surrogate_pools_hold_no_real_patient_data():
         assert len(set(pool)) == len(pool)
     assert all(p.startswith("+971") or p.startswith("+91") for p in SURROGATE_PHONES)
     assert len(set(SURROGATE_PHONES)) == len(SURROGATE_PHONES)
+
+
+# ------------------------------------------- the cross-check obeys the remote policy
+def test_the_cross_check_refuses_a_remote_model_unless_chosen():
+    """Redaction narrows what leaves the machine; it does not make sending it
+    a non-decision. The default model is a cloud one."""
+    from receptionist.nlu.llm_extractor import build_chat_model
+    with pytest.raises(ValueError, match="cloud model"):
+        build_chat_model("gpt-oss:120b-cloud", "http://localhost:11434")
+    with pytest.raises(ValueError, match="remote host"):
+        build_chat_model("qwen3:4b", "https://localhost.example.com")
+    build_chat_model("gpt-oss:120b-cloud", "http://localhost:11434", allow_remote=True)
+    build_chat_model("qwen3:4b", "http://localhost:11434")
+
+
+def test_the_default_cross_check_fails_closed_without_a_request():
+    """No injected model: the built-in default is the cloud model, so it is
+    refused before anything is sent, and the call carries on without it."""
+    assert extract_llm_slots("I need a cleaning tomorrow at 3 pm", NOW) is None
+
+
+def test_the_api_hook_forwards_the_remote_policy_and_timeout(monkeypatch):
+    from receptionist.api import main
+    from receptionist.config import settings
+    from receptionist.nlu import llm_extractor
+
+    seen = {}
+
+    def fake_build(model, base_url, timeout_s, allow_remote):
+        seen.update(model=model, base_url=base_url, timeout_s=timeout_s,
+                    allow_remote=allow_remote)
+        raise ValueError("refused")
+
+    monkeypatch.setattr(settings, "llm_crosscheck_enabled", True)
+    monkeypatch.setattr(settings, "llm_allow_remote", False)
+    monkeypatch.setattr(settings, "llm_timeout_s", 7.5)
+    monkeypatch.setattr(llm_extractor, "build_chat_model", fake_build)
+    hook = main._crosscheck_hook()
+    with pytest.raises(ValueError):
+        hook("text", NOW, None, None)
+    assert seen == {"model": settings.llm_model, "base_url": settings.llm_base_url,
+                    "timeout_s": 7.5, "allow_remote": False}
+
+
+def test_the_measurement_script_uses_the_configured_model_and_policy(monkeypatch, capsys):
+    import importlib.util
+    from pathlib import Path
+
+    from receptionist.config import settings
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "eval_crosscheck.py"
+    spec = importlib.util.spec_from_file_location("eval_crosscheck", path)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    seen = {}
+
+    def fake_build(model, base_url, timeout_s, allow_remote):
+        seen.update(model=model, allow_remote=allow_remote)
+        raise ValueError("refused for the test")
+
+    monkeypatch.setattr(settings, "llm_model", "qwen3:4b")
+    monkeypatch.setattr(settings, "llm_allow_remote", False)
+    monkeypatch.setattr(script, "build_chat_model", fake_build)
+    assert script.main() == 1
+    out = capsys.readouterr().out
+    assert seen == {"model": "qwen3:4b", "allow_remote": False}
+    assert "model: qwen3:4b" in out and "LLM_ALLOW_REMOTE=1" in out

@@ -269,6 +269,31 @@ def build_workflow() -> dict[str, Any]:
             },
             type_version=2,
         ),
+        _node(
+            "Alert Failed Sends", "n8n-nodes-base.httpRequest", [380, 260],
+            {
+                "method": "POST",
+                "url": OPS_ALERT_URL,
+                "sendBody": True,
+                "specifyBody": "json",
+                "jsonBody": (
+                    '={{ JSON.stringify({ "alert": "message dispatch", '
+                    '"failed": $json.failed, "expired": $json.expired, '
+                    '"retrying": $json.retrying, "sent": $json.sent, '
+                    '"cancelled": $json.cancelled, "detail": $json.detail }) }}'
+                ),
+                "options": {
+                    "retry": {"retryOnFail": True, "maxTries": 3},
+                    "timeout": DISPATCH_TIMEOUT_MS,
+                },
+                "notes": (
+                    "Without this node the condition above evaluated and "
+                    "nothing happened: failed and expired messages alerted "
+                    "nobody. The detail lists name template and booking only."
+                ),
+            },
+            type_version=4,
+        ),
     ]
 
     connections: dict[str, Any] = {
@@ -285,6 +310,8 @@ def build_workflow() -> dict[str, Any]:
         "Ignore Incomplete Call": {"main": [[_to("Acknowledge")]]},
         "Every 15 Minutes": {"main": [[_to("Dispatch Due Messages")]]},
         "Dispatch Due Messages": {"main": [[_to("Alert On Failed Sends")]]},
+        # Output 0 is the IF node's true branch; nothing on false.
+        "Alert On Failed Sends": {"main": [[_to("Alert Failed Sends")], []]},
     }
 
     return {

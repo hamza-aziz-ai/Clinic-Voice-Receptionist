@@ -12,6 +12,7 @@ no-availability.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -19,11 +20,13 @@ from typing import Any, Literal
 
 from ..config import settings as _settings
 from ..messaging.base import MessagingConnector, OutboundMessage, render_template
+from ..messaging.dispatch import dispatch_due
 from ..nlu.crosscheck import CrossCheckReport, apply_crosscheck
 from ..nlu.language import LANGUAGE_NAMES, detect_language
 from ..nlu.normalize import spoken_time
 from ..nlu.slots import (
     PROCEDURE_DURATION_MIN,
+    Slot,
     SlotSet,
     extract_for_slot,
     extract_slots,
@@ -74,6 +77,52 @@ CONFUSION_MARKERS = (
 def sounds_confused(text: str) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in CONFUSION_MARKERS)
+
+
+# Whole words, never substrings. Substring matching read "yesterday" as a yes
+# and "I know" as a no - the second rejected and cleared a correct name.
+AFFIRMATIVE_WORDS = frozenset(
+    {"yes", "yeah", "yep", "correct", "right", "ok", "okay", "sari", "seri", "haan"}
+)
+# Negation wins over any affirmative word: "that's not right" contains
+# "right". Apostrophe-free contractions are listed explicitly; matching any
+# word ending in "nt" would make "appointment" and "want" mean no.
+NEGATIVE_WORDS = frozenset({
+    "no", "not", "wrong", "incorrect", "illai", "illa", "nahi",
+    "isnt", "wasnt", "dont", "doesnt", "didnt", "arent", "cant",
+})
+
+
+def _answer_words(text: str) -> list[str]:
+    return re.findall(r"[\w']+", text.lower().replace("’", "'"))
+
+
+def is_negative(text: str) -> bool:
+    return any(w in NEGATIVE_WORDS or w.endswith("n't") for w in _answer_words(text))
+
+
+def is_affirmative(text: str) -> bool:
+    return not is_negative(text) and any(w in AFFIRMATIVE_WORDS for w in _answer_words(text))
+
+
+def _same_words(a: str, b: str) -> bool:
+    return " ".join(a.lower().split()) == " ".join(b.lower().split())
+
+
+def slot_read_back_by(slots: SlotSet, agent_said: str, language: str) -> Slot | None:
+    """The one pending slot this agent turn read back, or None.
+
+    A replayed yes or no is only evidence about the question that was actually
+    asked. The agent's turn has to be our own read-back for that slot, word for
+    word: parsing values out of free agent speech accepted "change your number
+    from 0501234567?" as a confirmation of that number, and misread our own
+    "That's Tuesday 28 July at 03:00 PM" as a vague morning.
+    """
+    if not agent_said:
+        return None
+    matches = [s for s in slots.pending_confirmation
+               if _same_words(readback_prompt(s, language), agent_said)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _carries_new_detail(text: str, now: datetime) -> bool:
@@ -137,6 +186,9 @@ class CallSession:
     # the same question five times about text that is not changing.
     crosscheck_cache: Any = None
     crosscheck_cached: bool = False
+    # The slot currently being read back. Cleared whenever the call leaves the
+    # confirm state, so a stale reference cannot absorb a later answer.
+    pending_slot: Slot | None = None
     # Anything the recogniser wanted flagged about the audio itself - 8 kHz
     # telephony against models benchmarked at 16 kHz, above all. Surfaced
     # rather than swallowed, because it is the gap between a published error
@@ -232,7 +284,15 @@ class CallHandler:
         text: str,
         now: datetime,
         word_confidences: dict[str, float] | None = None,
+        *,
+        agent_said: str | None = None,
     ) -> str:
+        """One caller turn.
+
+        ``agent_said`` is what the agent said just before this turn, supplied
+        when replaying a call someone else's agent conducted. ``None`` means
+        the live path, where the question was our own read-back.
+        """
         session.hear(text)
 
         if session.state == "detect_language":
@@ -249,7 +309,8 @@ class CallHandler:
             session.state = "collect"
 
         if session.state == "confirm":
-            return self._handle_readback_answer(session, text, now, word_confidences)
+            return self._handle_readback_answer(
+                session, text, now, word_confidences, agent_said)
 
         if session.state == "collect":
             return self._collect(session, text, now, word_confidences)
@@ -319,7 +380,7 @@ class CallHandler:
         pending = session.slots.pending_confirmation
         if pending:
             session.state = "confirm"
-            session._pending_slot = pending[0]           # type: ignore[attr-defined]
+            session.pending_slot = pending[0]
             return session.say(
                 readback_prompt(pending[0], session.language),
                 f"{pending[0].name} confidence {pending[0].confidence:.2f} below threshold",
@@ -352,19 +413,26 @@ class CallHandler:
     def _handle_readback_answer(
         self, session: CallSession, text: str, now: datetime,
         word_confidences: dict[str, float] | None,
+        agent_said: str | None = None,
     ) -> str:
-        slot = getattr(session, "_pending_slot", None)
-        lowered = text.lower()
-        affirmative = any(w in lowered for w in
-                          ("yes", "correct", "right", "yeah", "yep", "sari", "seri", "haan", "ok"))
-        negative = any(w in lowered for w in
-                       ("no", "not", "wrong", "illai", "illa", "nahi", "incorrect"))
+        slot = session.pending_slot
+        session.pending_slot = None
+        affirmative = is_affirmative(text)
+        negative = is_negative(text)
+
+        if slot is not None and agent_said is not None:
+            # Replay: bind the answer to the question the real agent asked,
+            # which need not be the slot this state machine picked. A yes or
+            # no to anything else is not evidence about any slot - no
+            # confirmation, no rejection, no strike. Volunteered details are
+            # still collected below.
+            slot = slot_read_back_by(session.slots, agent_said, session.language)
 
         if slot is None:
             session.state = "collect"
             return self._collect(session, text, now, word_confidences)
 
-        if affirmative and not negative:
+        if affirmative:
             slot.confirm()
             session.state = "collect"
             session.collect_turns -= 1     # a successful read-back is not a failed turn
@@ -406,6 +474,7 @@ class CallHandler:
         session.readback_failures += 1
         if session.readback_failures > MAX_READBACK_FAILURES:
             return self._escalate(session, "could not obtain a clear confirmation")
+        session.pending_slot = slot
         return session.say("Sorry, was that a yes or a no?", "ambiguous confirmation")
 
     def _apply_crosscheck(self, session: CallSession, text: str, now: datetime) -> None:
@@ -585,16 +654,18 @@ class CallHandler:
         session.booking_id = result.booking.booking_id
         session.state = "notify"
         if not result.replayed:
-            self._queue_messages(session, result.booking)
+            self._queue_messages(session, result.booking, now)
         session.state = "ended"
+        # No claim about the confirmation message. "Sent" can mean a mock
+        # recorded it, Telegram accepted it, or nothing at all on a retry -
+        # none of which is "on your WhatsApp".
         return session.say(
             f"You're booked for a {result.booking.procedure.replace('_', ' ')} on "
-            f"{result.booking.start:%A %d %B at %I:%M %p}. "
-            f"I've sent a confirmation to your WhatsApp. Goodbye.",
+            f"{result.booking.start:%A %d %B at %I:%M %p}. Goodbye.",
             f"booking {result.booking.booking_id}",
         )
 
-    def _queue_messages(self, session: CallSession, booking) -> None:
+    def _queue_messages(self, session: CallSession, booking, now: datetime) -> None:
         params = {
             "name": booking.patient_name,
             "procedure": booking.procedure.replace("_", " "),
@@ -610,33 +681,30 @@ class CallHandler:
         reminder_params = {**params, "when": f"{booking.start:%I:%M %p}"}
 
         plan = [
-            ("appointment_confirmation", None, params),
+            ("appointment_confirmation", now, params),
             ("appointment_reminder", booking.start - timedelta(days=1), reminder_params),
             ("review_request", booking.start + timedelta(hours=2), params),
         ]
         for template, when, body_params in plan:
-            msg = OutboundMessage(
+            session.messages.append(OutboundMessage(
                 template=template, to=booking.phone, language=session.language,
                 parameters=body_params, send_after=when, booking_id=booking.booking_id,
-            )
-            session.messages.append(msg)
-            if when is None:                       # immediate
-                try:
-                    msg.result = self.messaging.send(msg)
-                    msg.status = "sent"
-                except Exception as exc:
-                    # The chair is already reserved. A WhatsApp failure must
-                    # not unwind the booking or raise out of the call flow -
-                    # that would tell a caller "no" after telling them "yes",
-                    # and lose an appointment the clinic is holding. Record it
-                    # and let the dispatcher's failure count surface it.
-                    msg.status = "failed"
-                    msg.result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            ))
+
+        # The confirmation goes out now, through the dispatcher rather than a
+        # send of its own. Marking it "sent" on any return recorded a provider
+        # refusal as delivered and never retried it. The dispatcher already
+        # knows ok from retryable from rejected, and never raises - the chair
+        # is reserved, and a WhatsApp failure must not unwind the booking or
+        # tell a caller "no" after telling them "yes".
+        dispatch_due(session.messages[:1], self.messaging, self.calendar, now)
 
     def _escalate(self, session: CallSession, reason: str) -> str:
         session.state = "escalated"
         session.escalation_reason = reason
+        # No transfer and no callback are implemented, so neither is promised.
         return session.say(
-            "Let me put you through to our reception team who can help. One moment.",
+            "I'm sorry, I can't complete this booking myself. "
+            "Please contact our reception team directly.",
             f"escalated: {reason}",
         )

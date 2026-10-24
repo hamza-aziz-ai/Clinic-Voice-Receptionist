@@ -28,8 +28,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from receptionist.evaluation.corpus import CASES, REFERENCE      # noqa: E402
 from receptionist.evaluation.harness import evaluate             # noqa: E402
+from receptionist.config import settings                         # noqa: E402
 from receptionist.nlu.llm_extractor import (                     # noqa: E402
-    DEFAULT_MODEL,
     build_chat_model,
     extract_llm_slots,
 )
@@ -39,10 +39,23 @@ SEED = 11
 
 
 def main() -> int:
-    print(f"corpus: {len(CASES)} utterances · model: {DEFAULT_MODEL}\n")
+    # The same settings the service uses, including the remote policy: a
+    # measurement script is not a reason to send transcripts off the machine
+    # when the operator has not chosen to.
+    print(f"corpus: {len(CASES)} utterances · model: {settings.llm_model} "
+          f"@ {settings.llm_base_url}\n")
 
     try:
-        model = build_chat_model()
+        model = build_chat_model(
+            settings.llm_model, settings.llm_base_url,
+            timeout_s=settings.llm_timeout_s,
+            allow_remote=settings.llm_allow_remote,
+        )
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        print("Set LLM_ALLOW_REMOTE=1 to accept a remote model, or set "
+              "LLM_MODEL / LLM_BASE_URL to a locally served one.")
+        return 1
     except Exception as exc:
         print(f"cannot reach Ollama: {type(exc).__name__}: {exc}")
         return 1

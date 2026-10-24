@@ -247,3 +247,39 @@ def test_a_confirmed_slot_is_never_replaced():
     slots.patient_name.confirm()
     slots = _extract("this is Someone Else", now, existing=slots)
     assert slots.patient_name.value == "Priya Menon"
+
+
+# ------------------------------------------- a symptom is always read back
+def test_a_clearly_heard_symptom_is_still_read_back(monkeypatch):
+    """0.99 x 0.75 = 0.74 cleared the 0.70 procedure gate, booking a check-up
+    the caller never asked for. The gate holds at any threshold, even zero."""
+    from datetime import datetime
+
+    from receptionist.nlu import slots as slots_mod
+
+    now = datetime(2026, 7, 27, 10, 0)
+    heard = {"my": 0.99, "tooth": 0.99, "is": 0.99, "aching": 0.99}
+    for threshold in (0.70, 0.0):
+        monkeypatch.setitem(slots_mod.CONFIRMATION_THRESHOLDS, "procedure", threshold)
+        slot = slots_mod.extract_slots("my tooth is aching", now, heard).procedure
+        assert slot.source == "symptom" and slot.confidence > 0.70
+        assert slot.needs_confirmation, threshold
+        slot.confirm()
+        assert slot.usable
+
+
+def test_a_named_procedure_keeps_the_normal_gate():
+    from datetime import datetime
+
+    from receptionist.nlu.slots import extract_slots
+    slot = extract_slots("I need a cleaning", datetime(2026, 7, 27, 10, 0),
+                         {"i": 0.95, "need": 0.95, "a": 0.95, "cleaning": 0.95}).procedure
+    assert slot.source == "asr" and not slot.needs_confirmation
+
+
+def test_a_slot_with_no_threshold_still_raises_through_the_symptom_rule():
+    from receptionist.nlu.slots import Slot
+    slot = Slot("procedure", value="checkup", source="symptom")
+    slot.name = "not_a_slot"
+    with pytest.raises(KeyError):
+        _ = slot.needs_confirmation

@@ -9,9 +9,12 @@ patient never hears from you.
 from __future__ import annotations
 
 import abc
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
+
+log = logging.getLogger(__name__)
 
 TemplateName = Literal["appointment_confirmation", "appointment_reminder", "review_request"]
 
@@ -68,7 +71,12 @@ def render_template(template: TemplateName, language: str, params: dict[str, str
     receiving English when they called in Malayalam is a degraded experience
     that someone should be able to see and fix.
     """
-    body = TEMPLATES[template].get(language) or TEMPLATES[template]["en"]
+    body = TEMPLATES[template].get(language)
+    if body is None:
+        # Template and language only: the parameters are a patient's name,
+        # appointment and number.
+        log.warning("no %r template in %r; sending English", template, language)
+        body = TEMPLATES[template]["en"]
     return body.format(**params)
 
 

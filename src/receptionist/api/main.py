@@ -96,7 +96,11 @@ def _crosscheck_hook():
     def hook(text, now, name, phone):
         nonlocal model
         if model is None:
-            model = build_chat_model(settings.llm_model, settings.llm_base_url)
+            model = build_chat_model(
+                settings.llm_model, settings.llm_base_url,
+                timeout_s=settings.llm_timeout_s,
+                allow_remote=settings.llm_allow_remote,
+            )
         return extract_llm_slots(text, now, name, phone, chat_model=model)
 
     return hook
@@ -428,7 +432,11 @@ def dispatch(now: datetime | None = None) -> dict[str, Any]:
     node calls this; the console has a button for it; the tests call it with
     an explicit ``now`` instead of waiting a day for a reminder to come due.
     """
-    return dispatch_due(_all_messages(), messaging, calendar, now).to_dict()
+    # Same conversion as an utterance's `now`: everything below this layer is
+    # naive clinic wall time, and an aware timestamp would fail to compare.
+    return dispatch_due(
+        _all_messages(), messaging, calendar, _naive_clinic_local(now)
+    ).to_dict()
 
 
 @app.get("/evaluation")

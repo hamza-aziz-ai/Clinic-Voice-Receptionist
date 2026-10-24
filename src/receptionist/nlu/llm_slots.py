@@ -47,6 +47,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -178,8 +179,14 @@ Caller said:
 
 
 def is_local(base_url: str) -> bool:
-    lowered = (base_url or "").lower()
-    return any(host in lowered for host in LOCAL_HOSTS)
+    """Exact hostname, http(s) only. A substring check passed
+    https://localhost.example.com as local."""
+    try:
+        parts = urlsplit((base_url or "").strip())
+        host = parts.hostname
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and host in LOCAL_HOSTS
 
 
 def is_cloud_model(model: str) -> bool:
@@ -199,6 +206,27 @@ def is_cloud_model(model: str) -> bool:
     return (model or "").strip().lower().endswith("-cloud")
 
 
+def check_remote(model: str, base_url: str, allow_remote: bool) -> None:
+    """Raise unless the model is local or remote use was chosen.
+
+    Shared by every builder that sends call text to a model, so the policy
+    cannot be enforced on one path and forgotten on another.
+    """
+    remote = is_cloud_model(model) or not is_local(base_url)
+    if remote and not allow_remote:
+        where = "a cloud model" if is_cloud_model(model) else f"a remote host ({base_url})"
+        raise ValueError(
+            f"{model!r} is {where}, so transcripts containing patient names and "
+            "phone numbers would leave this machine. Set LLM_ALLOW_REMOTE=1 to "
+            "accept that, or use a locally-served model."
+        )
+    if remote:
+        log.warning(
+            "LLM extraction is using %s: call transcripts, including patient "
+            "names and phone numbers, are sent off this machine", model,
+        )
+
+
 def build_model(
     model: str,
     base_url: str,
@@ -215,19 +243,7 @@ def build_model(
     leaving the building is a decision someone should make on purpose rather
     than inherit from a default.
     """
-    remote = is_cloud_model(model) or not is_local(base_url)
-    if remote and not allow_remote:
-        where = "a cloud model" if is_cloud_model(model) else f"a remote host ({base_url})"
-        raise ValueError(
-            f"{model!r} is {where}, so transcripts containing patient names and "
-            "phone numbers would leave this machine. Set LLM_ALLOW_REMOTE=1 to "
-            "accept that, or use a locally-served model."
-        )
-    if remote:
-        log.warning(
-            "LLM extraction is using %s: call transcripts, including patient "
-            "names and phone numbers, are sent off this machine", model,
-        )
+    check_remote(model, base_url, allow_remote)
     from langchain_ollama import ChatOllama
 
     return ChatOllama(
