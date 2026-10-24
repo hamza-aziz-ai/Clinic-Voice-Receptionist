@@ -84,8 +84,15 @@ def test_the_example_documents_every_setting_the_code_reads():
     source = (root / "src" / "receptionist" / "config.py").read_text(encoding="utf-8")
     example = (root / ".env.example").read_text(encoding="utf-8")
 
+    slots = (root / "src" / "receptionist" / "nlu" / "slots.py").read_text(encoding="utf-8")
+
     referenced = set(re.findall(r'os\.environ\.get\(\s*"([A-Z0-9_]+)"', source))
-    referenced |= set(re.findall(r'_csv\(\s*"([A-Z0-9_]+)"', source))
+    # Settings read through the parsing helpers, and the gate's thresholds,
+    # which slots.py reads itself.
+    referenced |= set(re.findall(
+        r'_(?:csv|flag|int|float|time|weekdays)\(\s*"([A-Z0-9_]+)"', source))
+    referenced |= set(re.findall(r'_threshold\(\s*"([A-Z0-9_]+)"', slots))
+    assert {"VOICE_ENABLED", "CLINIC_CHAIRS", "THRESHOLD_PHONE"} <= referenced
     missing = sorted(name for name in referenced if name not in example)
     assert not missing, f"undocumented in .env.example: {missing}"
 
@@ -188,3 +195,14 @@ def test_the_calendar_is_built_from_settings():
     assert calendar.chairs == settings.clinic_chairs
     assert calendar.hours.open_time == settings.clinic_open_time
     assert calendar.hours.closed_weekdays == settings.clinic_closed_weekdays
+
+
+def test_a_malformed_utc_offset_falls_back_and_a_fractional_one_is_kept(monkeypatch):
+    """It was the one setting read with a bare float(), so a typo crashed the
+    import instead of falling back like every other value."""
+    from receptionist.config import Settings
+
+    monkeypatch.setenv("CLINIC_UTC_OFFSET_HOURS", "UAE")
+    assert Settings().clinic_utc_offset_hours == 4.0
+    monkeypatch.setenv("CLINIC_UTC_OFFSET_HOURS", "5.5")
+    assert Settings().clinic_utc_offset_hours == 5.5

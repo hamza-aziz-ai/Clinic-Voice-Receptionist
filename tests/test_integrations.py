@@ -199,3 +199,22 @@ def test_the_setup_note_separates_n8n_config_from_service_config():
     setup = build_workflow()["meta"]["setup"]
     assert ".env" in setup
     assert "N8N_BLOCK_ENV_ACCESS_IN_NODE" in setup
+
+
+def test_failed_sends_actually_reach_an_alert():
+    """The IF node used to have no outgoing connection: the condition held and
+    nobody was told."""
+    from receptionist.integrations.n8n import DISPATCH_TIMEOUT_MS, OPS_ALERT_URL
+
+    workflow = build_workflow()
+    branches = workflow["connections"]["Alert On Failed Sends"]["main"]
+    assert [c["node"] for c in branches[0]] == ["Alert Failed Sends"]   # true
+    assert branches[1] == []                                            # false
+    alert = nodes_by_name()["Alert Failed Sends"]
+    params = alert["parameters"]
+    assert alert["type"] == "n8n-nodes-base.httpRequest"
+    assert params["method"] == "POST" and params["url"] == OPS_ALERT_URL
+    for field in ("failed", "expired", "detail"):
+        assert f"$json.{field}" in params["jsonBody"]
+    assert params["options"]["timeout"] == DISPATCH_TIMEOUT_MS
+    assert params["options"]["retry"]["retryOnFail"] is True

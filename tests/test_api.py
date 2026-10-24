@@ -19,7 +19,7 @@ def booked_call(at: str) -> str:
         "assistant: I have your name as Priya Menon. Did I get that right?\n"
         "user: yes that's right\n"
         "user: my number is 0501234567\n"
-        "assistant: Is that correct?\n"
+        "assistant: Let me confirm your number: plus 971 501 234 567. Is that correct?\n"
         "user: yes correct\n"
         "assistant: Shall I book that?\n"
         "user: yes please\n"
@@ -256,3 +256,24 @@ def test_the_chat_renders_from_the_server_transcript():
     booking logic never saw."""
     js = client.get("/console/app.js").text
     assert "session.transcript" in js
+
+
+def test_dispatch_reads_an_aware_timestamp_as_clinic_time(webhook_open):
+    """The same instant, naive clinic-local or UTC with an offset, must give
+    the same decision - not a 500 from comparing aware with naive."""
+    body = client.post("/webhooks/bolna",
+                       json=execution(booked_call("6 pm"), id="exec-aware"),
+                       headers=webhook_open).json()
+    assert body["outcome"] == "booked", body
+    reminder = next(m for m in client.get("/messages").json()
+                    if m["booking_id"] == body["booking_id"]
+                    and m["template"] == "appointment_reminder")
+    # 18:00 Monday clinic time (UTC+4) is 14:00Z. One minute before is not due.
+    assert reminder["send_after"] == "2026-07-27T18:00:00"
+    early = client.post("/messages/dispatch",
+                        params={"now": "2026-07-27T13:59:00Z"}).json()
+    assert not any(body["booking_id"] in label for label in early["detail"]["sent"])
+    due = client.post("/messages/dispatch",
+                      params={"now": "2026-07-27T14:00:00+00:00"}).json()
+    assert any(f"appointment_reminder:{body['booking_id']}" == label
+               for label in due["detail"]["sent"])

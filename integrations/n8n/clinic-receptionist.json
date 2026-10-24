@@ -268,6 +268,31 @@
         140,
         320
       ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPS_ALERT_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"alert\": \"message dispatch\", \"failed\": $json.failed, \"expired\": $json.expired, \"retrying\": $json.retrying, \"sent\": $json.sent, \"cancelled\": $json.cancelled, \"detail\": $json.detail }) }}",
+        "options": {
+          "retry": {
+            "retryOnFail": true,
+            "maxTries": 3
+          },
+          "timeout": 30000
+        },
+        "notes": "Without this node the condition above evaluated and nothing happened: failed and expired messages alerted nobody. The detail lists name template and booking only."
+      },
+      "id": "alert-failed-sends",
+      "name": "Alert Failed Sends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        380,
+        260
+      ]
     }
   ],
   "connections": {
@@ -378,6 +403,18 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Alert On Failed Sends": {
+      "main": [
+        [
+          {
+            "node": "Alert Failed Sends",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },

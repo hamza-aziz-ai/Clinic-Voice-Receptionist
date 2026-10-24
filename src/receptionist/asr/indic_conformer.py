@@ -79,6 +79,13 @@ class IndicConformerTranscriber(Transcriber):
         self, audio: AudioRef, language_hint: str | None = None
     ) -> Transcript | None:
         refusal = self.guard(audio)
+        if refusal is None and not audio.single_speaker:
+            # The AudioRef says which channel is the caller, but nothing here
+            # extracts it: NeMo would get the whole recording, agent read-backs
+            # included, and score the caller's slots on the agent's own clear
+            # pronunciation of them. Refused until channel extraction exists.
+            refusal = ("caller-channel extraction is not implemented; refusing a "
+                       "recording that may contain the agent's speech")
         if refusal:
             log.warning("refusing to transcribe: %s", refusal)
             return None

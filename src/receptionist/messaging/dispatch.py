@@ -25,6 +25,7 @@ will never accept it.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable
@@ -32,11 +33,17 @@ from typing import Any, Iterable
 from ..scheduling.calendar import Calendar
 from .base import MessagingConnector, OutboundMessage
 
-# How long after its scheduled time a message may still go out. Measured
-# from the appointment, not from send_after, because what makes a reminder
-# worthless is the appointment having happened.
-REMINDER_VALID_UNTIL_APPOINTMENT = True
+# How long after the appointment a review request may still go out.
+# Confirmations and reminders expire at the appointment itself: what makes
+# them worthless is the appointment having happened.
 REVIEW_REQUEST_WINDOW = timedelta(days=7)
+
+# One pass at a time, covering the due check through the status update. The
+# immediate confirmation and the scheduled pass both come through here, and
+# without it two overlapping passes could each find the same message queued
+# and send it twice.
+# ponytail: process-local lock; cross-worker sends need a store with a claim step.
+_DISPATCH_LOCK = threading.Lock()
 
 
 @dataclass
@@ -74,7 +81,8 @@ def is_expired(message: OutboundMessage, calendar: Calendar, now: datetime) -> b
     if booking is None:
         return False
 
-    if message.template == "appointment_reminder" and REMINDER_VALID_UNTIL_APPOINTMENT:
+    if message.template in ("appointment_confirmation", "appointment_reminder"):
+        # A confirmation still being retried at the appointment is obsolete.
         return now >= booking.start
     if message.template == "review_request":
         return now > booking.start + REVIEW_REQUEST_WINDOW
@@ -89,6 +97,16 @@ def dispatch_due(
 ) -> DispatchReport:
     """Send everything due, and record why anything else was not sent."""
     now = now or datetime.now()
+    with _DISPATCH_LOCK:
+        return _dispatch(messages, connector, calendar, now)
+
+
+def _dispatch(
+    messages: Iterable[OutboundMessage],
+    connector: MessagingConnector,
+    calendar: Calendar,
+    now: datetime,
+) -> DispatchReport:
     report = DispatchReport()
 
     for message in messages:

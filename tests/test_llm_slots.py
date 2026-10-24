@@ -68,8 +68,13 @@ def test_localhost_variants_are_recognised():
     for url in ("http://localhost:11434", "http://127.0.0.1:11434",
                 "http://host.docker.internal:11434"):
         assert is_local(url)
-    for url in ("https://api.openai.com", "https://ollama.com", ""):
-        assert not is_local(url)
+    for url in ("HTTP://LOCALHOST:11434", "http://[::1]:11434"):
+        assert is_local(url)
+    for url in ("https://api.openai.com", "https://ollama.com", "",
+                "https://localhost.example.com", "http://localhost@evil.example",
+                "http://evil.example/localhost", "http://evil.example/?h=127.0.0.1",
+                "ftp://localhost", "localhost:11434", "http://[::1"):
+        assert not is_local(url), url
 
 
 # ------------------------------------------------- the rules' failures, fixed
@@ -284,3 +289,14 @@ def test_structured_output_uses_tool_calling():
     model = FakeModel(CallSlots())
     extract_slots_llm("hello", NOW, model)
     assert model.method == "function_calling"
+
+
+def test_a_clearly_heard_symptom_from_the_model_is_still_read_back(monkeypatch):
+    from receptionist.nlu import slots as slots_mod
+    heard = {"my": 0.99, "wisdom": 0.99, "tooth": 0.99, "is": 0.99, "aching": 0.99}
+    for threshold in (0.70, 0.0):
+        monkeypatch.setitem(slots_mod.CONFIRMATION_THRESHOLDS, "procedure", threshold)
+        slots = run("my wisdom tooth is aching", CallSlots(procedure="checkup"),
+                    word_confidences=heard)
+        assert slots.procedure.source == "symptom"
+        assert slots.procedure.needs_confirmation, threshold

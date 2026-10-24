@@ -538,3 +538,78 @@ def test_the_whole_reported_call_now_books():
     assert booking.procedure == "filling"
     assert booking.start == datetime(2026, 7, 30, 18, 0)   # Thursday, not Friday
     assert booking.phone == "+918860560626"
+
+
+# ------------------------------------------------- yes and no are whole words
+_WEAK_NAME = {"priya": 0.3, "menon": 0.3}
+
+
+def _at_name_readback():
+    handler = _handler()
+    session = handler.start()
+    handler.handle_utterance(session, "my name is Priya Menon", NOW_REAL, _WEAK_NAME)
+    assert session.state == "confirm"
+    return handler, session
+
+
+@pytest.mark.parametrize("reply", [
+    "yesterday", "I know", "book it", "isn't correct", "wasn't right",
+    "that's not right", "that isn\u2019t correct", "dont think so",
+])
+def test_these_replies_do_not_confirm(reply):
+    handler, session = _at_name_readback()
+    handler.handle_utterance(session, reply, NOW_REAL)
+    assert not session.slots.patient_name.confirmed, reply
+
+
+@pytest.mark.parametrize("reply", [
+    "yes", "yes I know", "yes, that appointment", "yes, that is what I want",
+    "okay", "haan", "correct",
+])
+def test_these_replies_confirm(reply):
+    handler, session = _at_name_readback()
+    handler.handle_utterance(session, reply, NOW_REAL)
+    assert session.slots.patient_name.confirmed, reply
+
+
+def test_a_contracted_no_rejects_the_value():
+    handler, session = _at_name_readback()
+    handler.handle_utterance(session, "no, that isn't right", NOW_REAL)
+    assert session.slots.patient_name.value is None
+    assert session.readback_failures == 1
+
+
+def test_the_pending_slot_is_cleared_on_every_way_out_of_a_readback():
+    handler, session = _at_name_readback()
+    assert session.pending_slot is session.slots.patient_name
+    handler.handle_utterance(session, "yes", NOW_REAL)
+    assert session.state == "collect" and session.pending_slot is None
+
+    handler, session = _at_name_readback()
+    handler.handle_utterance(session, "no", NOW_REAL)
+    assert session.state == "collect" and session.pending_slot is None
+
+    handler, session = _at_name_readback()
+    handler.handle_utterance(session, "hmm maybe", NOW_REAL)
+    assert session.state == "confirm" and session.pending_slot is session.slots.patient_name
+
+
+# ------------------------------------------- the agent promises only what it did
+def test_booking_makes_no_claim_about_the_confirmation_message():
+    handler = _handler()
+    session = handler.start("+971501234567")
+    replies = _run(handler, session, [
+        "my name is Priya Menon I need a cleaning tomorrow at 3 pm",
+        "my number is 0501234567", "yes"])
+    assert session.state == "ended", replies
+    assert "WhatsApp" not in replies[-1] and "sent" not in replies[-1]
+
+
+def test_escalation_promises_neither_a_transfer_nor_a_callback():
+    handler = _handler()
+    session = handler.start()
+    reply = handler._escalate(session, "test")
+    lowered = reply.lower()
+    assert "put you through" not in lowered
+    assert "call you back" not in lowered and "callback" not in lowered
+    assert "reception" in lowered

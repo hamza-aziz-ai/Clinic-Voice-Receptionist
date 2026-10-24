@@ -1,8 +1,10 @@
 """Second-opinion slot extraction via LangChain and Ollama.
 
-The rule extractor stays authoritative. This one exists to *disagree* - to
-notice when the regexes were confident and wrong, which is the only error
-class that reaches a patient.
+This one exists to *disagree* with the primary extraction - the rules, or the
+LLM-primary extractor when ``LLM_EXTRACTION_ENABLED`` is on - and to notice
+when it was confident and wrong, which is the only error class that reaches a
+patient. Both can run on the same configured model, so the two readings are
+not independent; that is one more reason agreement never raises confidence.
 
 WHAT THIS DELIBERATELY DOES NOT DO
 
@@ -159,6 +161,7 @@ def build_chat_model(
     model: str = DEFAULT_MODEL,
     base_url: str = DEFAULT_BASE_URL,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    allow_remote: bool = False,
 ) -> Any:
     """Construct the LangChain chat model.
 
@@ -166,7 +169,14 @@ def build_chat_model(
     runs - on a machine with no langchain-ollama installed. The cross-check
     is an optional enhancement; making it an import-time hard dependency
     would let it take down booking.
+
+    The same remote policy as the primary extractor: redaction narrows what
+    leaves the machine, it does not make sending it a non-decision. The
+    default cloud model is therefore refused unless ``allow_remote`` is set.
     """
+    from .llm_slots import check_remote
+
+    check_remote(model, base_url, allow_remote)
     from langchain_ollama import ChatOllama
 
     return ChatOllama(

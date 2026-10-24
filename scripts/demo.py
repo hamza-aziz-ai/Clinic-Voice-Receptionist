@@ -102,7 +102,7 @@ def main() -> int:
         "assistant: I have your name as Priya Menon. Did I get that right?\n"
         "user: yes that's right\n"
         "user: my number is 0501234567\n"
-        "assistant: Let me confirm your number. Is that correct?\n"
+        "assistant: Let me confirm your number: plus 971 501 234 567. Is that correct?\n"
         "user: yes correct\n"
         "assistant: Shall I book that?\n"
         "user: yes please\n"

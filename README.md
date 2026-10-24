@@ -6,7 +6,7 @@ Malayalam and Hindi. Books appointments, sends WhatsApp follow-up, and
 
 ```
 $ python scripts/demo.py       # no API keys, no network, no telephony account
-$ python -m pytest -q          # 324 passed
+$ python -m pytest -q          # 371 passed
 $ uvicorn receptionist.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -663,9 +663,7 @@ the real request body, so an ordering mistake fails offline.
   still comes from simulated word corruption, not sound. `IndicConformer` is
   written against NeMo's API and has never been run: NeMo needs torch, and
   every AI4Bharat repository is gated on Hugging Face.
-- **The Bolna agent prompt is not here.** Making the read-backs happen during
-  the call is a prompt-engineering job on Bolna's side. This repository assumes
-  they happened and verifies it from the transcript; it cannot make them happen.
+- **The Bolna agent prompt is not here.** Making the read-backs happen during the call is a prompt-engineering job on Bolna's side, and it now has a strict contract: a replayed yes or no only counts when the agent turn just before it is this system's own read-back for that slot, word for word (for example "Let me confirm your number: plus 971 501 234 567. Is that correct?"). A yes to "Is that correct?" with no value in it confirms nothing, so that call lands in the callback queue instead of booking.
 - **The corpus is 11 utterances.** Enough to catch the bugs above; not enough
   to make a claim about production accuracy. Its thinness is not theoretical:
   every case happened to name a procedure outright, so a caller who described

@@ -10,6 +10,8 @@ name = "downloadpytorch"
 
 [packages]
 fastapi = "*"
+# FastAPI needs it for UploadFile; without it /calls/{id}/audio fails at import.
+python-multipart = "*"
 uvicorn = "*"
 pydantic = "*"
 pydantic-settings = "*"

@@ -154,7 +154,7 @@ class Settings:
     # Clinic wall-clock offset from UTC. Bolna timestamps arrive UTC and
     # "tomorrow at 3pm" is meant in the clinic's local time; +4 is UAE.
     clinic_utc_offset_hours: float = field(
-        default_factory=lambda: float(os.environ.get("CLINIC_UTC_OFFSET_HOURS", "4"))
+        default_factory=lambda: _float("CLINIC_UTC_OFFSET_HOURS", 4.0)
     )
     # LLM second-opinion extractor. Off by default: it is an enhancement, and
     # a deployment that has not thought about sending transcripts to a remote
@@ -294,26 +294,10 @@ class Settings:
     clinic_chairs: int = field(default_factory=lambda: _int("CLINIC_CHAIRS", 2))
 
     # ------------------------------------------------------------ thresholds
-    # The safety policy of the whole system, and previously only editable in
-    # source. Below these a value is read back to the caller instead of
-    # booked. Phone is highest because one wrong digit is still a valid
-    # number, so nothing downstream can catch it.
-    #
-    # There is deliberately no way to add a slot here from the environment: a
-    # slot with no threshold must raise, not inherit a default that silently
-    # books. See nlu/slots.CONFIRMATION_THRESHOLDS.
-    threshold_phone: float = field(
-        default_factory=lambda: _float("THRESHOLD_PHONE", 0.92)
-    )
-    threshold_appointment_time: float = field(
-        default_factory=lambda: _float("THRESHOLD_APPOINTMENT_TIME", 0.85)
-    )
-    threshold_patient_name: float = field(
-        default_factory=lambda: _float("THRESHOLD_PATIENT_NAME", 0.75)
-    )
-    threshold_procedure: float = field(
-        default_factory=lambda: _float("THRESHOLD_PROCEDURE", 0.70)
-    )
+    # THRESHOLD_PHONE, THRESHOLD_APPOINTMENT_TIME, THRESHOLD_PATIENT_NAME and
+    # THRESHOLD_PROCEDURE are read by nlu/slots.CONFIRMATION_THRESHOLDS, the
+    # only place the gate looks. They used to be duplicated here as fields
+    # nothing read, so a reader could change one copy and not the other.
 
     # ---------------------------------------------------------- conversation
     # How many times one slot may be asked before handing to a human, and how

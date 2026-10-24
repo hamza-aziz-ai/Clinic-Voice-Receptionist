@@ -99,8 +99,9 @@ SYMPTOM_TERMS: tuple[str, ...] = (
 )
 
 # Confidence multiplier for a procedure inferred from a symptom rather than
-# named. Chosen to land the slot below the 0.70 threshold, so it is always
-# read back as "shall I book you a check-up" rather than silently booked.
+# named. It records weaker evidence; it is not what forces the read-back.
+# `Slot.needs_confirmation` does that for every symptom-sourced slot, because
+# a multiplier cannot hold at every ASR score and every configured threshold.
 # The caller said what hurts; they did not say what appointment they wanted.
 SYMPTOM_CONFIDENCE_FACTOR = 0.75
 
@@ -126,12 +127,18 @@ class Slot:
 
     @property
     def needs_confirmation(self) -> bool:
-        """Below threshold and not yet confirmed aloud."""
+        """Below threshold, or inferred from a symptom, and not yet confirmed aloud."""
         if not self.filled:
             return False
         if self.confirmed:
             return False
-        return self.confidence < CONFIRMATION_THRESHOLDS[self.name]
+        threshold = CONFIRMATION_THRESHOLDS[self.name]
+        # The caller described what hurts; they did not choose an
+        # appointment. However clearly that was heard, it is read back - a
+        # discount alone let 0.99 x 0.75 = 0.74 clear the 0.70 procedure gate.
+        if self.source == "symptom":
+            return True
+        return self.confidence < threshold
 
     @property
     def usable(self) -> bool:

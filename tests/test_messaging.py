@@ -219,7 +219,7 @@ def test_reminder_says_tomorrow_once_not_twice():
     session.language = "en"
     booking = handler.calendar.book(
         "Priya Menon", "+971501234567", "cleaning", APPOINTMENT).booking
-    handler._queue_messages(session, booking)
+    handler._queue_messages(session, booking, APPOINTMENT - timedelta(days=2))
 
     reminder = next(m for m in session.messages
                     if m.template == "appointment_reminder")
@@ -307,3 +307,111 @@ def test_4xx_is_not_retryable_but_5xx_is(monkeypatch):
         assert result["retryable"] is retryable, code
         # A non-JSON error body must not mask the status code.
         assert result["response"]["raw"] == "nope"
+
+
+# ------------------------------------------- the immediate confirmation
+class Scripted:
+    """Answers each send from a list, recording what it was asked to send."""
+
+    name = "scripted"
+
+    def __init__(self, *answers):
+        self.answers, self.sent = list(answers), []
+
+    def send(self, message):
+        self.sent.append(message)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _book_with(connector, now=NOW):
+    from receptionist.workflow.call import CallHandler
+    cal = Calendar(hours=ClinicHours(), chairs=2)
+    handler = CallHandler(cal, connector)
+    session = handler.start("+971501234567")
+    booking = cal.book("Priya Menon", "+971501234567", "cleaning", APPOINTMENT).booking
+    handler._queue_messages(session, booking, now)
+    confirmation = next(m for m in session.messages
+                        if m.template == "appointment_confirmation")
+    return cal, handler, session, confirmation
+
+
+def test_an_accepted_confirmation_is_sent():
+    _, _, _, m = _book_with(Scripted({"ok": True}))
+    assert m.status == "sent"
+
+
+def test_a_retryable_refusal_is_queued_not_reported_sent():
+    """Marking any return as sent recorded a refusal as delivered."""
+    connector = Scripted({"ok": False, "retryable": True}, {"ok": True})
+    cal, handler, session, m = _book_with(connector)
+    assert m.status == "queued"
+    dispatch_due(session.messages, connector, cal, now=NOW + timedelta(minutes=15))
+    assert m.status == "sent"
+    assert connector.sent.count(m) == 2
+
+
+def test_a_permanent_refusal_or_an_exception_fails_without_unwinding_the_booking():
+    for answer in ({"ok": False}, RuntimeError("provider down")):
+        cal, _, _, m = _book_with(Scripted(answer))
+        assert m.status == "failed"
+        assert len(cal.active()) == 1
+
+
+def test_a_cancelled_booking_cancels_a_confirmation_still_being_retried():
+    connector = Scripted({"ok": False, "retryable": True})
+    cal, _, session, m = _book_with(connector)
+    cal.cancel(m.booking_id)
+    dispatch_due(session.messages, connector, cal, now=NOW + timedelta(minutes=15))
+    assert m.status == "cancelled"
+    assert len(connector.sent) == 1
+
+
+def test_a_confirmation_still_queued_at_the_appointment_expires():
+    connector = Scripted({"ok": False, "retryable": True})
+    cal, _, session, m = _book_with(connector)
+    dispatch_due([m], connector, cal, now=APPOINTMENT)
+    assert m.status == "expired"
+    assert len(connector.sent) == 1
+
+
+def test_overlapping_dispatch_passes_send_a_message_once():
+    """The start barrier sits outside the lock: the passes start together, and
+    the lock serialises them, so the second finds the message already sent."""
+    import threading
+
+    cal, bid = booked_calendar()
+    m = message("appointment_reminder", booking_id=bid,
+                send_after=APPOINTMENT - timedelta(days=1))
+    connector = Scripted(*([{"ok": True}] * 8))
+    start = threading.Barrier(8)
+
+    def one_pass():
+        start.wait()
+        dispatch_due([m], connector, cal, now=APPOINTMENT - timedelta(hours=20))
+
+    threads = [threading.Thread(target=one_pass) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert m.status == "sent"
+    assert len(connector.sent) == 1
+
+
+def test_an_english_fallback_is_logged_without_the_patient_details(caplog):
+    import logging
+
+    from receptionist.messaging.base import render_template
+
+    with caplog.at_level(logging.WARNING, logger="receptionist.messaging.base"):
+        render_template("appointment_confirmation", "fr", PARAMS)
+    assert "'fr'" in caplog.text and "appointment_confirmation" in caplog.text
+    assert "Priya" not in caplog.text and "+971" not in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="receptionist.messaging.base"):
+        render_template("appointment_confirmation", "ml", PARAMS)
+    assert caplog.text == ""
